@@ -15,6 +15,7 @@
 
 #include "VASTFMT.h"
 #include "I2CSi4713.h"
+#include "util/GPIOUtils.h"
 
 #if defined(PLATFORM_BBB) || defined(PLATFORM_BB64)
 #include "util/BBBUtils.h"
