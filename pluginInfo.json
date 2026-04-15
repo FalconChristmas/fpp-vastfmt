@@ -1,32 +1,32 @@
 {
-	"repoName": "fpp-vastfmt",
-	"name": "Si4713/Vast V-FMT212R",
-	"author": "Daniel Kulp",
-	"description": "RDS/Audio support for the Vast Electronics V-FMT212R USB FM Transmitter and Si4713 I2C modules",
-	"homeURL": "https://github.com/FalconChristmas/fpp-vastfmt",
-	"srcURL": "https://github.com/FalconChristmas/fpp-vastfmt.git",
-	"bugURL": "https://github.com/FalconChristmas/fpp-vastfmt/issues",
-	"versions": [
-		{
-			"minFPPVersion": "0",
-			"maxFPPVersion": "1.9999",
-			"branch": "master",
-			"allowUpdates": 0,
-			"sha": "fd01a57464e9001441c11ae54dced2e1019c18bf"
-		},
-		{
-			"minFPPVersion": "2.0",
-			"maxFPPVersion": "2.99",
-			"branch": "master",
-			"allowUpdates": 0,
-			"sha": "749dc6bce52276a44e1223647809083947aa037d"
-		},
+    "repoName": "fpp-vastfmt",
+    "name": "Si4713/Vast V-FMT212R",
+    "author": "Daniel Kulp",
+    "description": "RDS/Audio support for the Vast Electronics V-FMT212R USB FM Transmitter and Si4713 I2C modules",
+    "homeURL": "https://github.com/FalconChristmas/fpp-vastfmt",
+    "srcURL": "https://github.com/FalconChristmas/fpp-vastfmt.git",
+    "bugURL": "https://github.com/FalconChristmas/fpp-vastfmt/issues",
+    "versions": [
         {
-                "minFPPVersion": "3.0",
-                "maxFPPVersion": "3.2.99",
-                "branch": "master",
-                "sha": "ada07e1d19f5eb7cafb6be65f0e4791afd770201",
-                "allowUpdates": 0
+            "minFPPVersion": "0",
+            "maxFPPVersion": "1.9999",
+            "branch": "master",
+            "allowUpdates": 0,
+            "sha": "fd01a57464e9001441c11ae54dced2e1019c18bf"
+        },
+        {
+            "minFPPVersion": "2.0",
+            "maxFPPVersion": "2.99",
+            "branch": "master",
+            "allowUpdates": 0,
+            "sha": "749dc6bce52276a44e1223647809083947aa037d"
+        },
+        {
+            "minFPPVersion": "3.0",
+            "maxFPPVersion": "3.2.99",
+            "branch": "master",
+            "sha": "ada07e1d19f5eb7cafb6be65f0e4791afd770201",
+            "allowUpdates": 0
         },
         {
             "minFPPVersion": "3.3",
@@ -35,7 +35,7 @@
             "sha": "8d3589395ae7615148ce7a29311408e1533ea423",
             "allowUpdates": 0
         },
-{
+        {
             "minFPPVersion": "4.0",
             "maxFPPVersion": "5.99",
             "branch": "master",
@@ -51,11 +51,17 @@
         },
         {
             "minFPPVersion": "9.0",
+            "maxFPPVersion": "9.99",
+            "branch": "master",
+            "sha": "",
+            "allowUpdates": 1
+        },
+        {
+            "minFPPVersion": "10.0",
             "maxFPPVersion": "0",
             "branch": "master",
             "sha": "",
             "allowUpdates": 1
         }
-	]
+    ]
 }
-
