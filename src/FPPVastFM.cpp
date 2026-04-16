@@ -44,11 +44,11 @@ static void padTo(std::string &s, int l) {
     }
 }
 
-class FPPVastFMPlugin : public FPPPlugin {
+class FPPVastFMPlugin : public FPPPlugins::Plugin, public FPPPlugins::PlaylistEventPlugin {
 public:
     bool enabled = true;
     bool rdsEnabled = false;
-    FPPVastFMPlugin() : FPPPlugin("fpp-vastfmt") {
+    FPPVastFMPlugin() : FPPPlugins::Plugin("fpp-vastfmt"), FPPPlugins::PlaylistEventPlugin() {
         setDefaultSettings();
         if (settings["Start"] == "FPPDStart") {
             startVast();
@@ -321,7 +321,7 @@ public:
 
 
 extern "C" {
-    FPPPlugin *createPlugin() {
+    FPPPlugins::Plugin *createPlugin() {
         return new FPPVastFMPlugin();
     }
 }
