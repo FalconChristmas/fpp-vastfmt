@@ -6,6 +6,7 @@
     "homeURL": "https://github.com/FalconChristmas/fpp-vastfmt",
     "srcURL": "https://github.com/FalconChristmas/fpp-vastfmt.git",
     "bugURL": "https://github.com/FalconChristmas/fpp-vastfmt/issues",
+    "iconURL": "https://raw.githubusercontent.com/FalconChristmas/fpp-vastfmt/master/icon.png",
     "versions": [
         {
             "minFPPVersion": "0",
