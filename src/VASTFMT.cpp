@@ -9,7 +9,7 @@
 
 #include "VASTFMT.h"
 
-#include "hidapi.h"
+#include <hidapi/hidapi.h>
 
 // VASTFM vendor/product
 //HID\VID_0451&PID_2100&REV_0101&MI_02

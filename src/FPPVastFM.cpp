@@ -56,7 +56,23 @@ public:
             startVastForRDS();
         }
     }
+    // Close the transmitter here rather than in the destructor. For the USB
+    // part that also stops hidapi's per-device read thread (hid_close() joins
+    // it), and doing it while the plugin is still a whole object means nothing
+    // is mid-call into it. Closing on unload rather than at destruction also
+    // releases the I2C bus or the USB device promptly when the plugin is
+    // uninstalled. Everything here is synchronous, so no readiness predicate.
+    virtual std::function<bool()> shutdown() override {
+        closeDevice();
+        return nullptr;
+    }
+
     virtual ~FPPVastFMPlugin() {
+        closeDevice(); // no-op if shutdown() already ran
+    }
+
+    // Idempotent, so shutdown() and the destructor can both call it.
+    void closeDevice() {
         if (si4713 != nullptr) {
             //si4713->powerDown();
             delete si4713;
@@ -319,6 +335,24 @@ public:
     Si4713 *si4713 = nullptr;
 };
 
+
+// Safe to dlclose() on unload: this plugin starts no threads, registers no
+// timers, issues no CurlManager requests, holds no epoll descriptors, adds no
+// commands and serves no HTTP routes. shutdown() closes the transmitter -
+// hid_close() for the USB part, which also releases the device rather than
+// holding it until fppd restarts.
+//
+// The USB HID path is why this used to be withheld. hidapi's LIBUSB backend was
+// compiled into this library (src/hid.c) and runs a read thread per open device,
+// so that thread's entry point sat inside the .so that dlclose() unmaps. It now
+// links the system -lhidapi-hidraw instead, as fpp-kfmt already did: the hidraw
+// backend is a thin wrapper over read/write/ioctl on /dev/hidraw*, starts no
+// threads, and lives in libhidapi-hidraw.so, which is never unloaded. This .so
+// therefore defines no hid_* symbol and makes no pthread_create call of its own
+// - check with:  nm -D libfpp-vastfmt.so | grep -E ' hid_|pthread_create'
+//
+// The I2C path never had any of this.
+FPP_PLUGIN_SUPPORTS_UNLOAD()
 
 extern "C" {
     FPPPlugins::Plugin *createPlugin() {
