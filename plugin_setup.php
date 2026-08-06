@@ -44,8 +44,8 @@ function OnConnectionChanged() {
 <div id="VASTFMTPluginhw" class="settings">
 <fieldset>
 <legend>VAST-FMT/Si4713 Hardware</legend>
-<p>Connection: <?php PrintSettingSelect("Connection", "Connection", 2, 0, "USB", Array("USB"=>"USB", "I2C"=>"I2C"), "fpp-vastfmt", "OnConnectionChanged"); ?></p>
-<p class="ResetPinInfo" id="ResetPinInfo">Reset GPIO: <?php PrintSettingSelect("ResetPin", "ResetPin", 2, 0, $defaultGPIO, $gpioPins, "fpp-vastfmt", ""); ?><br />
+<p>Connection: <?php PrintSettingSelect("Connection", "Connection", 0, 0, "USB", Array("USB"=>"USB", "I2C"=>"I2C"), "fpp-vastfmt", "OnConnectionChanged"); ?></p>
+<p class="ResetPinInfo" id="ResetPinInfo">Reset GPIO: <?php PrintSettingSelect("ResetPin", "ResetPin", 0, 0, $defaultGPIO, $gpioPins, "fpp-vastfmt", ""); ?><br />
 I2C connection requires a GPIO pin to reset/enable the Si4713.</p>
 </fieldset>
 </div>
@@ -55,11 +55,11 @@ I2C connection requires a GPIO pin to reset/enable the Si4713.</p>
 <div id="VASTFMTPluginsettings" class="settings">
 <fieldset>
 <legend>VAST-FMT/Si4713 Plugin Settings</legend>
-<p>Start at: <?php PrintSettingSelect("Start", "Start", 2, 0, "FPPDStart", Array("FPPD Start (default)"=>"FPPDStart", "Playlist Start"=>"PlaylistStart", "Never - RDS Only"=>"RDSOnly", "Never"=>"Never"), "fpp-vastfmt", ""); ?><br />
+<p>Start at: <?php PrintSettingSelect("Start", "Start", 0, 0, "FPPDStart", Array("FPPD Start (default)"=>"FPPDStart", "Playlist Start"=>"PlaylistStart", "Never - RDS Only"=>"RDSOnly", "Never"=>"Never"), "fpp-vastfmt", ""); ?><br />
 At Start, the hardware is reset, FM settings initialized, will broadcast any audio played, and send static RDS messages (if enabled).</p>
-<p>Stop at: <?php PrintSettingSelect("Stop", "Stop", 2, 0, "Never", Array("Playlist Stop"=>"PlaylistStop", "Never (default)"=>"Never"), "fpp-vastfmt", ""); ?><br />
+<p>Stop at: <?php PrintSettingSelect("Stop", "Stop", 0, 0, "Never", Array("Playlist Stop"=>"PlaylistStop", "Never (default)"=>"Never"), "fpp-vastfmt", ""); ?><br />
 At Stop, the hardware is reset. Listeners will hear static.</p>
-<p>Enable Volume Change Hack for Vast-FMT 212R: <?php PrintSettingCheckbox("EnableVolumeChangeHack", "EnableVolumeChangeHack", 2, 0, "1", "0", "fpp-vastfmt", ""); ?></p>
+<p>Enable Volume Change Hack for Vast-FMT 212R: <?php PrintSettingCheckbox("EnableVolumeChangeHack", "EnableVolumeChangeHack", 0, 0, "1", "0", "fpp-vastfmt", ""); ?></p>
 </fieldset>
 </div>
 
@@ -68,15 +68,15 @@ At Stop, the hardware is reset. Listeners will hear static.</p>
 <div id="VASTFMTsettings" class="settings">
 <fieldset>
 <legend>VAST-FMT/Si4713 FM Settings</legend>
-<p>Frequency (76.00-108.00): <?php PrintSettingTextSaved("Frequency", 2, 0, 6, 6, "fpp-vastfmt", "100.10"); ?>MHz</p>
-<p>Power (88-115, 116-120<sup>*</sup>): <?php PrintSettingTextSaved("Power", 2, 0, 3, 3, "fpp-vastfmt", "110"); ?>dB&mu;V
+<p>Frequency (76.00-108.00): <?php PrintSettingTextSaved("Frequency", 0, 0, 6, 6, "fpp-vastfmt", "100.10"); ?>MHz</p>
+<p>Power (88-115, 116-120<sup>*</sup>): <?php PrintSettingTextSaved("Power", 0, 0, 3, 3, "fpp-vastfmt", "110"); ?>dB&mu;V
 <br /><sup>*</sup>Can be set as high as 120dB&mu;V, but voltage accuracy above 115dB&mu;V is not guaranteed.</p>
-<p>Preemphasis: <?php PrintSettingSelect("Preemphasis", "Preemphasis", 2, 0, "75us", Array("50&mu;s (Europe, Australia, Japan)"=>"50us", "75&mu;s (USA, default)"=>"75us"), "fpp-vastfmt", ""); ?></p>
-<p>Antenna Tuning Capacitor (0=Auto, 1-191): <?php PrintSettingTextSaved("AntCap", 2, 0, 3, 3, "fpp-vastfmt", "0"); ?> * 0.25pF (If set to 0 and no FM signal detected, try a value around 50-80)</p>
-<p>Enable Audio Limitter: <?php PrintSettingCheckbox("AudioLimitter", "AudioLimitter", 2, 0, "True", "False", "fpp-vastfmt", "", "True"); ?></p>
-<p>Enable Audio Compression: <?php PrintSettingCheckbox("AudioCompression", "AudioCompression", 2, 0, "True", "False", "fpp-vastfmt", "", "True"); ?></p>
-<p>Audio Compression Threshold (-64 - 0 db): <?php PrintSettingTextSaved("AudioCompressionThreshold", 2, 0, 3, 3, "fpp-vastfmt", "-15"); ?></p>
-<p>Audio Gain (0 - 16): <?php PrintSettingTextSaved("AudioGain", 2, 0, 3, 3, "fpp-vastfmt", "5"); ?></p>
+<p>Preemphasis: <?php PrintSettingSelect("Preemphasis", "Preemphasis", 0, 0, "75us", Array("50&mu;s (Europe, Australia, Japan)"=>"50us", "75&mu;s (USA, default)"=>"75us"), "fpp-vastfmt", ""); ?></p>
+<p>Antenna Tuning Capacitor (0=Auto, 1-191): <?php PrintSettingTextSaved("AntCap", 0, 0, 3, 3, "fpp-vastfmt", "0"); ?> * 0.25pF (If set to 0 and no FM signal detected, try a value around 50-80)</p>
+<p>Enable Audio Limitter: <?php PrintSettingCheckbox("AudioLimitter", "AudioLimitter", 0, 0, "True", "False", "fpp-vastfmt", "", "True"); ?></p>
+<p>Enable Audio Compression: <?php PrintSettingCheckbox("AudioCompression", "AudioCompression", 0, 0, "True", "False", "fpp-vastfmt", "", "True"); ?></p>
+<p>Audio Compression Threshold (-64 - 0 db): <?php PrintSettingTextSaved("AudioCompressionThreshold", 0, 0, 3, 3, "fpp-vastfmt", "-15"); ?></p>
+<p>Audio Gain (0 - 16): <?php PrintSettingTextSaved("AudioGain", 0, 0, 3, 3, "fpp-vastfmt", "5"); ?></p>
 </fieldset>
 </div>
 
@@ -85,18 +85,18 @@ At Stop, the hardware is reset. Listeners will hear static.</p>
 <div id="VASTFMTRDSsettings" class="settings">
 <fieldset>
 <legend>VAST-FMT/Si4713 RDS Settings</legend>
-<p>Enable RDS: <?php PrintSettingCheckbox("EnableRDS", "EnableRDS", 2, 0, "True", "False", "fpp-vastfmt", ""); ?></p>
+<p>Enable RDS: <?php PrintSettingCheckbox("EnableRDS", "EnableRDS", 0, 0, "True", "False", "fpp-vastfmt", ""); ?></p>
 <p>RDS Station - Sent 8 characters at a time.  Max of 64 characters.<br />
-Station Text: <?php PrintSettingTextSaved("StationText", 2, 0, 64, 32, "fpp-vastfmt", "Merry   Christ- mas"); ?>
+Station Text: <?php PrintSettingTextSaved("StationText", 0, 0, 64, 32, "fpp-vastfmt", "Merry   Christ- mas"); ?>
 
 <br />
 
-<p>RDS Text: <?php PrintSettingTextSaved("RDSTextText", 2, 0, 64, 32, "fpp-vastfmt", "[{Artist} - {Title}]"); ?>
+<p>RDS Text: <?php PrintSettingTextSaved("RDSTextText", 0, 0, 64, 32, "fpp-vastfmt", "[{Artist} - {Title}]"); ?>
 <p>
 Place {Artist} or {Title} where the media artist/title should be placed. Area's wrapped in brackets ( [] ) will not be output unless media is present.
 
 
-<p>Program Type (PTY North America / Europe): <?php PrintSettingSelect("Pty", "Pty", 2, 0, 2,
+<p>Program Type (PTY North America / Europe): <?php PrintSettingSelect("Pty", "Pty", 0, 0, 2,
 Array(
 "0 - None / None"=>0, 
 "1 - News / News"=>1, 

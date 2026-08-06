@@ -48,7 +48,10 @@ class FPPVastFMPlugin : public FPPPlugins::Plugin, public FPPPlugins::PlaylistEv
 public:
     bool enabled = true;
     bool rdsEnabled = false;
-    FPPVastFMPlugin() : FPPPlugins::Plugin("fpp-vastfmt"), FPPPlugins::PlaylistEventPlugin() {
+    // The "true" asks FPP to watch config/plugin.fpp-vastfmt and call
+    // settingChanged() below, so retuning the transmitter no longer needs an
+    // fppd restart.
+    FPPVastFMPlugin() : FPPPlugins::Plugin("fpp-vastfmt", true), FPPPlugins::PlaylistEventPlugin() {
         setDefaultSettings();
         if (settings["Start"] == "FPPDStart") {
             startVast();
@@ -113,8 +116,11 @@ public:
         if (si4713->isOk()) {
             si4713->enableAudioCompression(settings["AudioCompression"] == "True");
             si4713->enableAudioLimitter(settings["AudioLimitter"] == "True");
-            si4713->setAudioGain(std::stoi(settings["AudioGain"]));
-            si4713->setAudioCompressionThreshold(std::stoi(settings["AudioCompressionThreshold"]));
+            // All user input, and these now run whenever a setting changes
+            // rather than only at startup, so a throw would land on the main
+            // loop inside FPP's file-monitor callback and take fppd down.
+            si4713->setAudioGain(safeStoi(settings["AudioGain"], 0, "AudioGain"));
+            si4713->setAudioCompressionThreshold(safeStoi(settings["AudioCompressionThreshold"], -15, "AudioCompressionThreshold"));
             if (settings["Preemphasis"] == "50us") {
                 si4713->setEUPreemphasis();
             }
@@ -145,15 +151,14 @@ public:
     void startVast() {
         if (si4713 == nullptr) {
             if (initVast()) {
-                std::string freq = settings["Frequency"];
-                float f = std::stof(freq);
+                float f = safeStof(settings["Frequency"], 100.1f, "Frequency");
                 f *= 100;
                 si4713->setFrequency(f);
 
-                f = std::stoi(settings["AntCap"]);
-                si4713->setTXPower(std::stoi(settings["Power"]), f);
+                f = safeStoi(settings["AntCap"], 0, "AntCap");
+                si4713->setTXPower(safeStoi(settings["Power"], 110, "Power"), f);
                 
-                si4713->setPTY(std::stoi(settings["Pty"]));
+                si4713->setPTY(safeStoi(settings["Pty"], 0, "Pty"));
                 
                 std::string asq = si4713->getASQ();
                 LogInfo(VB_PLUGIN, "VAST-FMT: %s\n", asq.c_str());
@@ -180,6 +185,65 @@ public:
             }
         }
     }
+    // Re-open the transmitter with the current settings. Everything that
+    // shapes the RF or the device connection is applied while the chip is being
+    // set up, so a change to any of it means going round again - which is also
+    // what retuning physically requires.
+    void applyConfiguration() {
+        bool wasRunning = (si4713 != nullptr);
+        stopVast();
+        if (settings["Start"] == "FPPDStart") {
+            startVast();
+        } else if (settings["Start"] == "RDSOnly") {
+            startVastForRDS();
+        } else if (wasRunning) {
+            // Started by a playlist rather than at boot; keep it on the air.
+            startVast();
+        }
+    }
+
+    // Called by FPP when config/plugin.fpp-vastfmt changes; the base class has
+    // already updated settings[key].
+    virtual void settingChanged(const std::string &key, const std::string &value) override {
+        if (key == "Start" || key == "Stop" || key == "EnableVolumeChangeHack") {
+            // Read at point of use in the playlist callbacks - nothing to do.
+            return;
+        }
+        if (key == "StationText" || key == "RDSTextText") {
+            // Just push the new text; no reason to drop the carrier for it.
+            if (si4713 != nullptr && rdsEnabled) {
+                formatAndSendText(settings["StationText"], "", "", true);
+                formatAndSendText(settings["RDSTextText"], "", "", false);
+            }
+            return;
+        }
+        LogInfo(VB_PLUGIN, "VAST-FMT: %s changed, reconfiguring\n", key.c_str());
+        applyConfiguration();
+    }
+
+    static int safeStoi(const std::string &s, int defVal, const char *name) {
+        try {
+            if (!s.empty()) {
+                return std::stoi(s);
+            }
+        } catch (const std::exception &e) {
+            LogErr(VB_PLUGIN, "VAST-FMT: bad value for %s (\"%s\"): %s - using %d\n",
+                   name, s.c_str(), e.what(), defVal);
+        }
+        return defVal;
+    }
+    static float safeStof(const std::string &s, float defVal, const char *name) {
+        try {
+            if (!s.empty()) {
+                return std::stof(s);
+            }
+        } catch (const std::exception &e) {
+            LogErr(VB_PLUGIN, "VAST-FMT: bad value for %s (\"%s\"): %s - using %0.2f\n",
+                   name, s.c_str(), e.what(), defVal);
+        }
+        return defVal;
+    }
+
     void stopVast() {
         if (si4713 != nullptr) {
             //si4713->powerDown();
