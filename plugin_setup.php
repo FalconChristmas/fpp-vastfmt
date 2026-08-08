@@ -12,10 +12,13 @@
         $defaultGPIOChip = 3;
     }
     echo "<!-- " . $curGpio . "     " . $defaultGPIO . "  -->\n";
-    $data = file_get_contents('http://127.0.0.1:32322/gpio');
+    // Go through Apache's proxied /api/ route rather than fppd's internal
+    // :32322 port directly - that port isn't a documented interface and isn't
+    // guaranteed to stay where it is.
+    $data = file_get_contents('http://127.0.0.1/api/gpio');
     $gpiojson = json_decode($data, true);
     $gpioPins = Array();
-    foreach($gpiojson as $gpio) {
+    foreach(is_array($gpiojson) ? $gpiojson : Array() as $gpio) {
         $pn = $gpio['pin'] . ' (GPIO: ' . $gpio['gpioChip'] . '/' . $gpio['gpioLine'] . ')';
         $gpioPins[$pn] = $gpio['pin'];
         

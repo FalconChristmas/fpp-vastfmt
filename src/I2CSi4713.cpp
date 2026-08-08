@@ -84,7 +84,7 @@ std::string I2CSi4713::getRev() {
     int chiprev = response[8];
     
     char buf[250];
-    sprintf(buf, "Si4713 - pn: %X  fw: %X   patch: %X   cmp: %X    chiprev: %X", pn, fw, patch, cmp, chiprev);
+    snprintf(buf, sizeof(buf), "Si4713 - pn: %X  fw: %X   patch: %X   cmp: %X    chiprev: %X", pn, fw, patch, cmp, chiprev);
     return buf;
 }
 
@@ -114,7 +114,7 @@ std::string I2CSi4713::getTuneStatus() {
     float f = currFreq / 100.0f;
     
     char buf[100];
-    sprintf(buf, "Freq: %.1f MHz  -  Power: %d dBuV  -  ANTcap: %d", f, currdBuV, currAntCap);
+    snprintf(buf, sizeof(buf), "Freq: %.1f MHz  -  Power: %d dBuV  -  ANTcap: %d", f, currdBuV, currAntCap);
     return buf;
 }
 bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data, bool ignoreFailures) {
