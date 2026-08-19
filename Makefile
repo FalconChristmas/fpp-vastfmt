@@ -47,7 +47,7 @@ CXXFLAGS_src/FPPVastFM.o += -I$(SRCDIR)
 	$(CCACHE) $(CC) $(CFLAGS) $(CXXFLAGS) $(CXXFLAGS_$@) -c $< -o $@
 
 %.o: %.c Makefile $(HIDAPI_DEP)
-	$(CCACHE) gcc $(CFLAGS) $(CFLAGS_$@) -c $< -o $@
+	$(CCACHE) $(CCOMPILER) $(CFLAGS) $(CFLAGS_$@) -c $< -o $@
 
 libfpp-vastfmt.$(SHLIB_EXT): $(OBJECTS_fpp_vastfmt_so) $(SRCDIR)/libfpp.$(SHLIB_EXT)
 	$(CCACHE) $(CC) -shared $(CFLAGS_$@) $(OBJECTS_fpp_vastfmt_so) $(LIBS_fpp_vastfmt_so) $(LDFLAGS) -o $@

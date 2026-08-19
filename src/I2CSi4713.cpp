@@ -1,5 +1,9 @@
 #include <fpp-pch.h>
 
+#include <thread>
+
+#include "log.h"
+
 #include "I2CSi4713.h"
 
 #include "util/I2CUtils.h"

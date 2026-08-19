@@ -1,5 +1,10 @@
 #include <fpp-pch.h>
 
+#include <cstring>
+#include <ctime>
+
+#include "log.h"
+
 #include <sys/time.h>
 
 #include "Si4713.h"
