@@ -64,5 +64,28 @@
             "sha": "",
             "allowUpdates": 1
         }
-    ]
+    ],
+    "privacy": {
+        "summary": "Broadcasts your show's audio over FM to anyone in range, starting whenever FPP starts by default. With RDS on it also broadcasts the current song's artist and title. Nothing goes over the network.",
+        "sends": [
+            {
+                "to": "anyone in FM range",
+                "what": "the audio FPP is playing",
+                "why": "so people nearby can hear the show on their car or portable radio",
+                "alwaysOn": true
+            },
+            {
+                "to": "anyone in FM range",
+                "what": "your station text and the current song's artist and title, as RDS text on the FM signal",
+                "why": "so car radios can show the station name and what is playing",
+                "alwaysOn": false
+            }
+        ],
+        "collects": [],
+        "sensors": [],
+        "remoteAccess": "none",
+        "systemChanges": [],
+        "closedCode": false,
+        "other": "By default the transmitter starts broadcasting whenever fppd starts; change 'Start at' to Playlist Start or Never to control that. RDS is off until you tick Enable RDS. Talks only to the USB or I2C transmitter on this device. With the optional volume hack on, it nudges FPP's volume down and back up at each song change. At debug log level the RDS text it sends appears in the fppd log. Its settings file (config/plugin.fpp-vastfmt) stays after uninstall."
+    }
 }
