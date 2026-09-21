@@ -90,6 +90,13 @@ public:
     uint64_t  nextMpcPoll  = 0;
     std::string mpcTitle;
     std::string mpcArtist;
+
+    // Temporary overrides driven by FPP commands. Non-empty wins over the
+    // configured text; an empty string is how a command restores the
+    // configuration, so these are deliberately not "is set" flags.
+    std::string stationTextOverride;
+    std::string rdsTextOverride;
+    std::vector<Command*> myCommands;
     // The "true" asks FPP to watch config/plugin.fpp-vastfmt and call
     // settingChanged() below, so retuning the transmitter no longer needs an
     // fppd restart.
@@ -110,6 +117,8 @@ public:
             }
         });
 
+        registerCommands();
+
         // Bringing the transmitter up resets the hardware and waits on it, so
         // it belongs on the worker rather than in fppd's plugin load.
         queueWork([this]() {
@@ -129,13 +138,18 @@ public:
     // device, which for the USB part also joins hidapi's read thread.
     virtual std::function<bool()> shutdown() override {
         unregisterApis();
+        unregisterCommands();
         stopWorker();
         closeDevice();
         return nullptr;
     }
 
     virtual ~FPPVastFMPlugin() {
-        stopWorker();  // no-ops if shutdown() already ran
+        // Backstop for a teardown that never called shutdown(). All three are
+        // no-ops once shutdown() has run - unregisterCommands() empties the
+        // list it iterates, so nothing is removed or deleted twice.
+        unregisterCommands();
+        stopWorker();
         closeDevice();
     }
 
@@ -293,8 +307,8 @@ public:
     void initRDS() {
         LogInfo(VB_PLUGIN, "Enabling RDS\n");
         si4713->beginRDS();
-        formatAndSendText(settings["StationText"], "", "", true);
-        formatAndSendText(settings["RDSTextText"], "", "", false);
+        formatAndSendText(effectiveStationText(), "", "", true);
+        formatAndSendText(effectiveRdsText(), "", "", false);
     }
     
     void startVast() {
@@ -361,8 +375,8 @@ public:
                 mpcTitle.clear();
                 mpcArtist.clear();
                 queueWork([this]() {
-                    formatAndSendText(settings["StationText"], "", "", true);
-                    formatAndSendText(settings["RDSTextText"], "", "", false);
+                    formatAndSendText(effectiveStationText(), "", "", true);
+                    formatAndSendText(effectiveRdsText(), "", "", false);
                 });
             }
             return;
@@ -375,8 +389,8 @@ public:
             // Just push the new text; no reason to drop the carrier for it.
             queueWork([this]() {
                 if (si4713 != nullptr && rdsEnabled) {
-                    formatAndSendText(settings["StationText"], "", "", true);
-                    formatAndSendText(settings["RDSTextText"], "", "", false);
+                    formatAndSendText(effectiveStationText(), "", "", true);
+                    formatAndSendText(effectiveRdsText(), "", "", false);
                 }
             });
             return;
@@ -491,8 +505,8 @@ public:
         std::string act = action;
         queueWork([this, act]() {
             if (act == "stop" && rdsEnabled) {
-                formatAndSendText(settings["StationText"], "", "", true);
-                formatAndSendText(settings["RDSTextText"], "", "", false);
+                formatAndSendText(effectiveStationText(), "", "", true);
+                formatAndSendText(effectiveRdsText(), "", "", false);
             }
             if (settings["Start"] == "PlaylistStart" && act == "start") {
                 startVast();
@@ -532,8 +546,8 @@ public:
             artist = "";
         }
         
-        formatAndSendText(settings["StationText"], artist, title, true);
-        formatAndSendText(settings["RDSTextText"], artist, title, false);
+        formatAndSendText(effectiveStationText(), artist, title, true);
+        formatAndSendText(effectiveRdsText(), artist, title, false);
     }
     
     
@@ -639,6 +653,28 @@ public:
         callback(makeStringResponse(job->result.toStyledString(), 200, "application/json"));
     }
 
+    const std::string &effectiveStationText() {
+        return stationTextOverride.empty() ? settings["StationText"] : stationTextOverride;
+    }
+    const std::string &effectiveRdsText() {
+        return rdsTextOverride.empty() ? settings["RDSTextText"] : rdsTextOverride;
+    }
+
+    // Set an override and push it out now. Runs on the worker, so the command
+    // handler itself never touches the transmitter.
+    void applyTextOverride(bool station, const std::string &text) {
+        queueWork([this, station, text]() {
+            (station ? stationTextOverride : rdsTextOverride) = text;
+            LogInfo(VB_PLUGIN, "VAST-FMT: %s override %s\n",
+                    station ? "station text" : "RDS text",
+                    text.empty() ? "cleared" : ("-> \"" + text + "\"").c_str());
+            if (si4713 != nullptr && rdsEnabled) {
+                formatAndSendText(effectiveStationText(), "", "", true);
+                formatAndSendText(effectiveRdsText(), "", "", false);
+            }
+        });
+    }
+
     bool afterHoursEnabled() const {
         auto it = settings.find("AfterHoursRDS");
         return mpcAvailable && it != settings.end() && it->second != "0";
@@ -694,8 +730,8 @@ public:
                     mpcArtist = a;
                     LogInfo(VB_PLUGIN, "VAST-FMT: After Hours \"%s\"%s%s\n", t.c_str(),
                             a.empty() ? "" : " by ", a.c_str());
-                    formatAndSendText(settings["StationText"], a, t, true);
-                    formatAndSendText(settings["RDSTextText"], a, t, false);
+                    formatAndSendText(effectiveStationText(), a, t, true);
+                    formatAndSendText(effectiveRdsText(), a, t, false);
                 }
                 lk.lock();
             }
@@ -718,6 +754,69 @@ public:
                 condition.wait_for(lk, std::chrono::milliseconds(50));
             }
         }
+    }
+
+    // FPP commands, so a show can put something on the air without editing
+    // the configuration. Running either with an empty string restores the
+    // configured text, which is why blanks are allowed on the argument.
+    class StationTextCommand : public Command {
+    public:
+        StationTextCommand(FPPVastFMPlugin *p) :
+            Command("VAST-FMT Station Text",
+                    "Temporarily replace the RDS station text. Send an empty value to go "
+                    "back to the configured station text."),
+            plugin(p) {
+            args.push_back(CommandArg("text", "string", "Station Text", true));
+        }
+        std::unique_ptr<Command::Result> run(const std::vector<std::string> &a) override {
+            plugin->applyTextOverride(true, a.empty() ? "" : a[0]);
+            return std::make_unique<Command::Result>(
+                (a.empty() || a[0].empty()) ? "Station text restored" : "Station text set");
+        }
+        FPPVastFMPlugin *plugin;
+    };
+
+    class RdsTextCommand : public Command {
+    public:
+        RdsTextCommand(FPPVastFMPlugin *p) :
+            Command("VAST-FMT RDS Text",
+                    "Temporarily replace the RDS text. Send an empty value to go back to "
+                    "the configured text and song information."),
+            plugin(p) {
+            args.push_back(CommandArg("text", "string", "RDS Text", true));
+        }
+        std::unique_ptr<Command::Result> run(const std::vector<std::string> &a) override {
+            plugin->applyTextOverride(false, a.empty() ? "" : a[0]);
+            return std::make_unique<Command::Result>(
+                (a.empty() || a[0].empty()) ? "RDS text restored" : "RDS text set");
+        }
+        FPPVastFMPlugin *plugin;
+    };
+
+    void registerCommands() {
+        myCommands.push_back(new StationTextCommand(this));
+        myCommands.push_back(new RdsTextCommand(this));
+        for (auto *c : myCommands) {
+            CommandManager::INSTANCE.addCommand(c);
+        }
+    }
+    // A plugin owns what it registers. removeCommand() only unregisters - it
+    // does not delete, and does not wait for anything in flight - so the delete
+    // is ours, and it has to happen before this library is unmapped: a Command
+    // subclass declared here has its vtable in this .so.
+    //
+    // FPP keeps a backstop that deletes whatever a plugin leaves behind, and it
+    // compares the registered pointer before doing so, so withdrawing here is
+    // not a double delete - it is the path FPP expects, and skipping it earns a
+    // warning naming this plugin at unload.
+    //
+    // Idempotent: the list is cleared, so a second call finds nothing.
+    void unregisterCommands() {
+        for (auto *c : myCommands) {
+            CommandManager::INSTANCE.removeCommand(c);
+            delete c;
+        }
+        myCommands.clear();
     }
 
     void setDefaultSettings() {
