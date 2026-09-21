@@ -124,8 +124,11 @@ function vfmUpdatePsPreview() {
         n + (n === 1 ? ' screen' : ' screens') + ', ' + txt.length + ' of 64 characters';
 }
 
+// URLs here are relative on purpose. An absolute "/api/..." loses the prefix
+// when the page is reached through FPP's proxy or loaded by FPPMon, and the
+// request goes to the wrong host.
 function vfmRefreshStatus() {
-    $.ajax({ url: '/api/plugin-apis/vastfmt', dataType: 'json', cache: false,
+    $.ajax({ url: 'api/plugin-apis/vastfmt', dataType: 'json', cache: false,
       success: function(s) {
         vfmSetText('vfmState', s.state === 'ok' ? 'Running' : (s.state || 'unknown'),
                    s.state !== 'ok');
@@ -150,7 +153,7 @@ function vfmRetune() {
     var btn = document.getElementById('vfmRetuneBtn');
     btn.disabled = true;
     vfmSetText('vfmRetuneMsg', 'testing\u2026', false);
-    $.ajax({ url: '/api/plugin-apis/vastfmt/retune', type: 'POST', dataType: 'json', cache: false,
+    $.ajax({ url: 'api/plugin-apis/vastfmt/retune', type: 'POST', dataType: 'json', cache: false,
       success: function(r) {
         btn.disabled = false;
         if (!r.ok) { vfmSetText('vfmRetuneMsg', r.error || 'failed', true); return; }
