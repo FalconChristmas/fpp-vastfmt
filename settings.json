@@ -1,0 +1,284 @@
+{
+    "settingGroups": {
+        "VASTFMTHardware": {
+            "description": "VAST-FMT/Si4713 Hardware",
+            "settings": [
+                "Connection",
+                "ResetPin"
+            ]
+        },
+        "VASTFMTPlugin": {
+            "description": "Plugin Settings",
+            "settings": [
+                "Start",
+                "Stop",
+                "EnableVolumeChangeHack"
+            ]
+        },
+        "VASTFMTRadio": {
+            "description": "FM Settings",
+            "settings": [
+                "Frequency",
+                "Power",
+                "Preemphasis",
+                "AntCap",
+                "AudioLimitter",
+                "AudioCompression",
+                "AudioCompressionThreshold",
+                "AudioGain"
+            ]
+        },
+        "VASTFMTRDS": {
+            "description": "RDS Settings",
+            "settings": [
+                "EnableRDS",
+                "StationText",
+                "RDSTextText",
+                "Pty"
+            ]
+        }
+    },
+    "settings": {
+        "Connection": {
+            "name": "Connection",
+            "description": "Connection",
+            "tip": "How the transmitter is attached. USB is the Vast Electronics V-FMT212R. I2C is a bare Si4713 module wired to the I2C bus, which also needs a reset pin.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "USB",
+            "options": {
+                "USB": "USB",
+                "I2C": "I2C"
+            }
+        },
+        "ResetPin": {
+            "name": "ResetPin",
+            "description": "Reset GPIO",
+            "tip": "I2C only: the GPIO wired to the Si4713 reset pin. The chip stays in reset, and will not answer on the I2C bus at all, until this pin is driven - so a wrong pin here looks exactly like missing hardware. Ignored for USB.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "",
+            "optionsURL": "api/gpio",
+            "optionsKey": "pin",
+            "optionCanBeBlank": true
+        },
+        "Start": {
+            "name": "Start",
+            "description": "Start at",
+            "tip": "When to bring the transmitter up. At start the hardware is reset, the FM settings are applied, any audio FPP plays is broadcast, and static RDS text is sent if RDS is on.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "FPPDStart",
+            "options": {
+                "FPPD Start (default)": "FPPDStart",
+                "Playlist Start": "PlaylistStart",
+                "Never - RDS Only": "RDSOnly",
+                "Never": "Never"
+            }
+        },
+        "Stop": {
+            "name": "Stop",
+            "description": "Stop at",
+            "tip": "When to shut the transmitter down. At stop the hardware is reset and listeners hear static, so leave this on Never unless you want the carrier to drop between playlists.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "Never",
+            "options": {
+                "Playlist Stop": "PlaylistStop",
+                "Never (default)": "Never"
+            }
+        },
+        "Frequency": {
+            "name": "Frequency",
+            "description": "FM Frequency",
+            "tip": "FM frequency to broadcast on, 76.00 to 108.00 MHz. Pick a channel that is clear where you live; changing this re-runs the antenna tuning.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "text",
+            "default": "100.10",
+            "size": 6,
+            "maxlength": 6
+        },
+        "Power": {
+            "name": "Power",
+            "description": "Transmit Power",
+            "tip": "Transmit power in dBuV. The chip accepts 88 to 120; above 115 the level is no longer guaranteed accurate. Values outside that range are clamped, not obeyed.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "number",
+            "default": 110,
+            "min": 88,
+            "max": 120
+        },
+        "Preemphasis": {
+            "name": "Preemphasis",
+            "description": "Preemphasis",
+            "tip": "Must match the receivers in your region, or audio sounds dull or harsh. 75us in North America, 50us in Europe, Australia and Japan.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "75us",
+            "options": {
+                "50us (Europe, Australia, Japan)": "50us",
+                "75us (USA, default)": "75us"
+            }
+        },
+        "AntCap": {
+            "name": "AntCap",
+            "description": "Antenna Tuning Capacitor",
+            "tip": "0 lets the chip search for the antenna match itself, which is usually right. Any other value (1-191, in 0.25pF steps) turns that search off and pins the capacitor. If automatic tuning reports no match, press Test Antenna Tuning below to see what it picks, then set a value by hand - around 50-80 often suits a short wire antenna.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 191
+        },
+        "EnableRDS": {
+            "name": "EnableRDS",
+            "description": "RDS",
+            "tip": "Send RDS text on the FM signal so radios can show the station name and what is playing. Off leaves the audio unchanged.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": "False",
+            "options": {
+                "On": "True",
+                "Off": "False"
+            }
+        },
+        "StationText": {
+            "name": "StationText",
+            "description": "Station Text",
+            "tip": "The station name radios display. RDS sends this 8 characters at a time, so it is padded into 8-character screens and the breaks land wherever the padding puts them - the preview under this field shows exactly what a radio will step through. Max 64 characters.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "text",
+            "default": "Merry   Christ- mas",
+            "size": 32,
+            "maxlength": 64
+        },
+        "RDSTextText": {
+            "name": "RDSTextText",
+            "description": "RDS Text",
+            "tip": "The scrolling text radios display. Use {Artist} and {Title} where the current song's details should go; anything inside [ ] is left out when no media is playing. Max 64 characters.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "text",
+            "default": "[{Artist} - {Title}]",
+            "size": 32,
+            "maxlength": 64
+        },
+        "Pty": {
+            "name": "Pty",
+            "description": "Program Type",
+            "tip": "The RDS programme type radios show and use for genre search. The two names are the North American and European meanings of the same number.",
+            "restart": 0,
+            "reboot": 0,
+            "type": "select",
+            "default": 2,
+            "options": {
+                "0 - None / None": 0,
+                "1 - News / News": 1,
+                "2 - Information / Current Affairs": 2,
+                "3 - Sport / Information": 3,
+                "4 - Talk / Sport": 4,
+                "5 - Rock / Education": 5,
+                "6 - Classic Rock / Drama": 6,
+                "7 - Adult Hits / Culture": 7,
+                "8 - Soft Rock / Science": 8,
+                "9 - Top 40 / Varied": 9,
+                "10 - Country / Pop": 10,
+                "11 - Oldies / Rock": 11,
+                "12 - Soft Music / Easy Listening": 12,
+                "13 - Nostalgia / Light Classical": 13,
+                "14 - Jazz / Serious Classical": 14,
+                "15 - Classical / Other Music": 15,
+                "16 - R&B / Weather": 16,
+                "17 - Soft R&B / Finance": 17,
+                "18 - Language / Childrens": 18,
+                "19 - Religious Music / Social Affairs": 19,
+                "20 - Religious Talk / Religion": 20,
+                "21 - Personality / Phone-In": 21,
+                "22 - Public / Travel": 22,
+                "23 - College / Leisure": 23,
+                "24 - --- / Jazz": 24,
+                "25 - --- / Country": 25,
+                "26 - --- / National Music": 26,
+                "27 - --- / Oldies": 27,
+                "28 - --- / Folk": 28,
+                "29 - Weather / Documentary": 29
+            }
+        },
+        "AudioLimitter": {
+            "name": "AudioLimitter",
+            "description": "Audio Limiter",
+            "tip": "Stops loud passages overmodulating, which is what makes a signal distort on the loudest parts. Leave on unless you are feeding an already-limited source.",
+            "restart": 0,
+            "reboot": 0,
+            "level": 1,
+            "type": "select",
+            "default": "True",
+            "options": {
+                "On": "True",
+                "Off": "False"
+            }
+        },
+        "AudioCompression": {
+            "name": "AudioCompression",
+            "description": "Audio Compression",
+            "tip": "Evens out loud and quiet material so the station stays at a consistent volume. Leave on for a show with mixed source material.",
+            "restart": 0,
+            "reboot": 0,
+            "level": 1,
+            "type": "select",
+            "default": "True",
+            "options": {
+                "On": "True",
+                "Off": "False"
+            }
+        },
+        "AudioCompressionThreshold": {
+            "name": "AudioCompressionThreshold",
+            "description": "Compression Threshold",
+            "tip": "The level in dB, -64 to 0, above which compression starts working. Lower values compress more of the material.",
+            "restart": 0,
+            "reboot": 0,
+            "level": 1,
+            "type": "number",
+            "default": -15,
+            "min": -64,
+            "max": 0
+        },
+        "AudioGain": {
+            "name": "AudioGain",
+            "description": "Audio Gain",
+            "tip": "Make-up gain in dB, 0 to 16, applied after compression. Raise it if the station sounds quiet next to commercial ones; too high and it distorts.",
+            "restart": 0,
+            "reboot": 0,
+            "level": 1,
+            "type": "number",
+            "default": 5,
+            "min": 0,
+            "max": 16
+        },
+        "EnableVolumeChangeHack": {
+            "name": "EnableVolumeChangeHack",
+            "description": "Volume Change Workaround",
+            "tip": "Works around a V-FMT212R quirk by nudging FPP's volume down and back up at each song change. Only enable if audio drops out between songs on that hardware.",
+            "restart": 0,
+            "reboot": 0,
+            "level": 1,
+            "type": "select",
+            "default": "0",
+            "options": {
+                "Off": "0",
+                "On": "1"
+            }
+        }
+    }
+}
