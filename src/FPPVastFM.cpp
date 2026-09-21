@@ -3,6 +3,12 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <queue>
+#include <thread>
 
 #include <unistd.h>
 #include <termios.h>
@@ -53,42 +59,144 @@ public:
     bool enabled = true;
     bool rdsEnabled = false;
 
-    // Everything that touches the transmitter takes this. Until the status API
-    // existed the device was only ever reached from fppd's own callbacks, one
-    // at a time; an HTTP handler runs on a drogon thread and would otherwise
-    // be talking to the same USB or I2C device midway through a playlist
-    // callback doing the same.
-    std::mutex deviceLock;
+    // The transmitter is reached from one thread and one thread only. Callers
+    // - playlist and media callbacks, settings changes, HTTP handlers - put
+    // work on this queue instead of touching the device, so a slow I2C or USB
+    // exchange never runs on fppd's main loop or a drogon thread, and two of
+    // them can never overlap.
+    std::atomic<bool> running{false};
+    std::mutex lock;
+    std::condition_variable condition;
+    std::thread workerThread;
+    std::queue<std::function<void()>> functions;
+
+    // Everything a queued job touches on a waiter's behalf. Both threads own
+    // it, so a wait that times out cannot leave the worker writing into the
+    // caller's dead stack.
+    struct RadioJob {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool done = false;
+        Json::Value result;
+        bool ok = false;
+    };
+
+    bool      playlistActive = false;
+
+    // After Hours Music Player streams over mpd while FPP is idle. Polling its
+    // track title lets RDS follow the stream instead of sitting on the static
+    // station text between playlists.
+    bool      mpcAvailable = false;
+    uint64_t  nextMpcPoll  = 0;
+    std::string mpcTitle;
+    std::string mpcArtist;
     // The "true" asks FPP to watch config/plugin.fpp-vastfmt and call
     // settingChanged() below, so retuning the transmitter no longer needs an
     // fppd restart.
     FPPVastFMPlugin() : FPPPlugins::Plugin("fpp-vastfmt", true), FPPPlugins::PlaylistEventPlugin() {
         setDefaultSettings();
-        if (settings["Start"] == "FPPDStart") {
-            startVast();
-        } else if (settings["Start"] == "RDSOnly") {
-            startVastForRDS();
-        }
+        mpcAvailable = FileExists("/usr/bin/mpc") || FileExists("/bin/mpc") ||
+                       FileExists("/usr/local/bin/mpc");
+
+        running = true;
+        workerThread = std::thread([this]() {
+            // Nothing escapes this thread.
+            try {
+                this->run();
+            } catch (const std::exception &e) {
+                LogErr(VB_PLUGIN, "VAST-FMT: run() exception: %s\n", e.what());
+            } catch (...) {
+                LogErr(VB_PLUGIN, "VAST-FMT: run() unknown exception\n");
+            }
+        });
+
+        // Bringing the transmitter up resets the hardware and waits on it, so
+        // it belongs on the worker rather than in fppd's plugin load.
+        queueWork([this]() {
+            if (settings["Start"] == "FPPDStart") {
+                startVast();
+            } else if (settings["Start"] == "RDSOnly") {
+                startVastForRDS();
+            }
+        });
     }
-    // Close the transmitter here rather than in the destructor. For the USB
-    // part that also stops hidapi's per-device read thread (hid_close() joins
-    // it), and doing it while the plugin is still a whole object means nothing
-    // is mid-call into it. Closing on unload rather than at destruction also
-    // releases the I2C bus or the USB device promptly when the plugin is
-    // uninstalled. Everything here is synchronous, so no readiness predicate.
+    // Order matters here. Withdraw the HTTP routes first: that call does not
+    // return until no request is executing in the handler and the handler
+    // itself has been destroyed, so nothing can queue new work afterwards.
+    // Then stop and join the worker, whose body is this plugin's own code and
+    // touches every member - it has to finish while the object is whole, and
+    // before the library it lives in can be unmapped. Only then close the
+    // device, which for the USB part also joins hidapi's read thread.
     virtual std::function<bool()> shutdown() override {
         unregisterApis();
+        stopWorker();
         closeDevice();
         return nullptr;
     }
 
     virtual ~FPPVastFMPlugin() {
-        closeDevice(); // no-op if shutdown() already ran
+        stopWorker();  // no-ops if shutdown() already ran
+        closeDevice();
     }
 
     // Idempotent, so shutdown() and the destructor can both call it.
+    void stopWorker() {
+        if (!workerThread.joinable()) {
+            return;
+        }
+        running = false;
+        condition.notify_all();
+        workerThread.join();
+    }
+
+    void queueWork(std::function<void()> fn) {
+        if (!running) {
+            return;   // never queue work the worker will not come back for
+        }
+        {
+            std::lock_guard<std::mutex> lk(lock);
+            functions.emplace(std::move(fn));
+        }
+        condition.notify_all();
+    }
+
+    // Run work on the worker and wait for it. A timeout does NOT cancel the
+    // job, so it must not reach anything owned by the caller's frame: it
+    // writes into the RadioJob it is handed, and fn captures only `this`.
+    std::shared_ptr<RadioJob> runOnWorker(const std::function<void(RadioJob &)> &fn,
+                                          int timeoutMs) {
+        if (!running) {
+            return nullptr;
+        }
+        auto job = std::make_shared<RadioJob>();
+        {
+            std::lock_guard<std::mutex> lk(lock);
+            functions.emplace([fn, job]() {
+                try {
+                    fn(*job);
+                } catch (const std::exception &e) {
+                    LogErr(VB_PLUGIN, "VAST-FMT: exception in job: %s\n", e.what());
+                } catch (...) {
+                    LogErr(VB_PLUGIN, "VAST-FMT: unknown exception in job\n");
+                }
+                {
+                    std::lock_guard<std::mutex> g(job->mutex);
+                    job->done = true;
+                }
+                job->cv.notify_one();
+            });
+        }
+        condition.notify_all();
+        std::unique_lock<std::mutex> ul(job->mutex);
+        if (!job->cv.wait_for(ul, std::chrono::milliseconds(timeoutMs),
+                              [&job]() { return job->done; })) {
+            return nullptr;
+        }
+        return job;
+    }
+
+    // Called with the worker stopped, so it needs no lock of its own.
     void closeDevice() {
-        std::lock_guard<std::mutex> lk(deviceLock);
         if (si4713 != nullptr) {
             //si4713->powerDown();
             delete si4713;
@@ -246,21 +354,35 @@ public:
     // Called by FPP when config/plugin.fpp-vastfmt changes; the base class has
     // already updated settings[key].
     virtual void settingChanged(const std::string &key, const std::string &value) override {
-        std::lock_guard<std::mutex> lk(deviceLock);
+        if (key == "AfterHoursRDS") {
+            // Turning it off should drop the stream title rather than leave
+            // the last track frozen on air.
+            if (settings["AfterHoursRDS"] == "0" && !mpcTitle.empty()) {
+                mpcTitle.clear();
+                mpcArtist.clear();
+                queueWork([this]() {
+                    formatAndSendText(settings["StationText"], "", "", true);
+                    formatAndSendText(settings["RDSTextText"], "", "", false);
+                });
+            }
+            return;
+        }
         if (key == "Start" || key == "Stop" || key == "EnableVolumeChangeHack") {
             // Read at point of use in the playlist callbacks - nothing to do.
             return;
         }
         if (key == "StationText" || key == "RDSTextText") {
             // Just push the new text; no reason to drop the carrier for it.
-            if (si4713 != nullptr && rdsEnabled) {
-                formatAndSendText(settings["StationText"], "", "", true);
-                formatAndSendText(settings["RDSTextText"], "", "", false);
-            }
+            queueWork([this]() {
+                if (si4713 != nullptr && rdsEnabled) {
+                    formatAndSendText(settings["StationText"], "", "", true);
+                    formatAndSendText(settings["RDSTextText"], "", "", false);
+                }
+            });
             return;
         }
         LogInfo(VB_PLUGIN, "VAST-FMT: %s changed, reconfiguring\n", key.c_str());
-        applyConfiguration();
+        queueWork([this]() { applyConfiguration(); });
     }
 
     static int safeStoi(const std::string &s, int defVal, const char *name) {
@@ -359,20 +481,27 @@ public:
     
 
     virtual void playlistCallback(const Json::Value &playlist, const std::string &action, const std::string &section, int item) {
-        std::lock_guard<std::mutex> lk(deviceLock);
-        if (action == "stop" && rdsEnabled) {
-            formatAndSendText(settings["StationText"], "", "", true);
-            formatAndSendText(settings["RDSTextText"], "", "", false);
+        if (action == "start" || action == "playing") {
+            playlistActive = true;
+            mpcTitle.clear();   // the playlist's own media data takes over
+            mpcArtist.clear();
+        } else if (action == "stop") {
+            playlistActive = false;
         }
-        if (settings["Start"] == "PlaylistStart" && action == "start") {
-            startVast();
-        } else if (settings["Stop"] == "PlaylistStop" && action == "stop") {
-            stopVast();
-        }
-        
+        std::string act = action;
+        queueWork([this, act]() {
+            if (act == "stop" && rdsEnabled) {
+                formatAndSendText(settings["StationText"], "", "", true);
+                formatAndSendText(settings["RDSTextText"], "", "", false);
+            }
+            if (settings["Start"] == "PlaylistStart" && act == "start") {
+                startVast();
+            } else if (settings["Stop"] == "PlaylistStop" && act == "stop") {
+                stopVast();
+            }
+        });
     }
     virtual void mediaCallback(const Json::Value &playlist, const MediaDetails &mediaDetails) {
-        std::lock_guard<std::mutex> lk(deviceLock);
         if (!rdsEnabled) {
             return;
         }
@@ -425,8 +554,8 @@ public:
         FPPPlugins::unregisterPluginApi("/vastfmt/retune");
     }
 
-    // Caller holds deviceLock.
-    Json::Value statusJsonLocked() {
+    // Runs on the worker, so it may talk to the device directly.
+    Json::Value statusJsonOnWorker() {
         Json::Value root;
         root["connection"] = settings["Connection"];
         root["part"] = (partNumber >= 0) ? Si4713::partName(partNumber) : "unknown";
@@ -461,7 +590,7 @@ public:
     // find out what it would choose - which is the whole point of the button.
     // The configured value is put back afterwards so a show is not left on a
     // different setting than the page shows.
-    Json::Value retuneLocked() {
+    Json::Value retuneOnWorker() {
         Json::Value root;
         if (si4713 == nullptr) {
             root["ok"] = false;
@@ -487,7 +616,7 @@ public:
             ? "Automatic tuning found a match."
             : "Automatic tuning found no match - the antenna is probably not "
               "resonant near this frequency. Set the capacitor by hand.";
-        Json::Value st = statusJsonLocked();
+        Json::Value st = statusJsonOnWorker();
         for (const auto &k : st.getMemberNames()) {
             root[k] = st[k];
         }
@@ -495,17 +624,100 @@ public:
     }
 
     void handleApi(const HttpRequestPtr &req, HttpCallback &&callback) {
-        const std::string path = req->path();
-        Json::Value root;
-        {
-            std::lock_guard<std::mutex> lk(deviceLock);
-            if (path.find("retune") != std::string::npos) {
-                root = retuneLocked();
-            } else {
-                root = statusJsonLocked();
+        const bool retune = req->path().find("retune") != std::string::npos;
+        auto job = runOnWorker([this, retune](RadioJob &j) {
+            j.result = retune ? retuneOnWorker() : statusJsonOnWorker();
+        }, retune ? 25000 : 5000);
+        if (!job) {
+            Json::Value err;
+            err["ok"] = false;
+            err["error"] = "timeout";
+            err["state"] = "busy";
+            callback(makeStringResponse(err.toStyledString(), 200, "application/json"));
+            return;
+        }
+        callback(makeStringResponse(job->result.toStyledString(), 200, "application/json"));
+    }
+
+    bool afterHoursEnabled() const {
+        auto it = settings.find("AfterHoursRDS");
+        return mpcAvailable && it != settings.end() && it->second != "0";
+    }
+
+    // Ask mpd for one formatted field.
+    //
+    // stderr is discarded on purpose: with no mpd running, mpc writes
+    // "MPD error: Connection refused" there and leaves stdout empty, so
+    // without this the station would cheerfully broadcast that as its
+    // RadioText.
+    static std::string readMpcField(const char *format) {
+        std::string out;
+        std::string cmd = std::string("mpc current -f '") + format + "' 2>/dev/null";
+        FILE *f = popen(cmd.c_str(), "r");
+        if (f == nullptr) {
+            return out;
+        }
+        char buf[256];
+        if (fgets(buf, sizeof(buf), f) != nullptr) {
+            out = buf;
+        }
+        pclose(f);
+        while (!out.empty() &&
+               (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) {
+            out.pop_back();
+        }
+        return out;
+    }
+
+    void run() {
+        std::unique_lock<std::mutex> lk(lock);
+        while (running) {
+            uint64_t ct = GetTimeMS();
+
+            // While nothing is playing, follow the After Hours stream's title.
+            // Only when idle: a running playlist's own media data is better.
+            //
+            // Runs with the queue lock released - it starts a subprocess, and
+            // the RDS update below talks to the transmitter, neither of which
+            // should be done holding the lock the callbacks need.
+            if (afterHoursEnabled() && !playlistActive && si4713 != nullptr &&
+                    rdsEnabled && ct > nextMpcPoll) {
+                nextMpcPoll = ct + 12000;
+                lk.unlock();
+                std::string t = readMpcField("%title%");
+                // Streams usually carry only a title, and often put
+                // "Artist - Title" in it, so artist is frequently empty -
+                // ask anyway, so {Artist} resolves when it is there.
+                std::string a = readMpcField("[%artist%|%performer%|%albumartist%]");
+                if (t != mpcTitle || a != mpcArtist) {
+                    mpcTitle = t;
+                    mpcArtist = a;
+                    LogInfo(VB_PLUGIN, "VAST-FMT: After Hours \"%s\"%s%s\n", t.c_str(),
+                            a.empty() ? "" : " by ", a.c_str());
+                    formatAndSendText(settings["StationText"], a, t, true);
+                    formatAndSendText(settings["RDSTextText"], a, t, false);
+                }
+                lk.lock();
+            }
+
+            while (!functions.empty()) {
+                auto f = functions.front();
+                functions.pop();
+                lk.unlock();
+                try {
+                    f();
+                } catch (const std::exception &e) {
+                    LogErr(VB_PLUGIN, "VAST-FMT: exception in queued work: %s\n", e.what());
+                } catch (...) {
+                    LogErr(VB_PLUGIN, "VAST-FMT: unknown exception in queued work\n");
+                }
+                lk.lock();
+            }
+
+            if (running && functions.empty()) {
+                condition.wait_for(lk, std::chrono::milliseconds(50));
             }
         }
-        callback(makeStringResponse(root.toStyledString(), 200, "application/json"));
     }
 
     void setDefaultSettings() {
@@ -530,6 +742,7 @@ public:
         setIfNotFound("AudioLimitter", "True");
         setIfNotFound("AudioGain", "5");
         setIfNotFound("AudioCompressionThreshold", "-15");
+        setIfNotFound("AfterHoursRDS", "0");
     }
     void setIfNotFound(const std::string &s, const std::string &v, bool emptyAllowed = false) {
         if (settings.find(s) == settings.end()) {
@@ -545,26 +758,33 @@ public:
 };
 
 
-// Safe to dlclose() on unload: this plugin starts no threads, registers no
-// timers, issues no CurlManager requests, holds no epoll descriptors and adds
-// no commands. It does serve HTTP routes, and shutdown() gives them back with
-// unregisterPluginApi() before anything else - that call does not return until
-// no request is executing inside the handler and the handler object itself has
-// been destroyed, which is what makes unmapping this library safe. It runs
-// before the device is closed so a handler already waiting on deviceLock
-// cannot be left holding a freed transmitter. shutdown() closes the
-// transmitter -
-// hid_close() for the USB part, which also releases the device rather than
-// holding it until fppd restarts.
+// Safe to dlclose() on unload, in this order, and the order is the point.
 //
-// The USB HID path is why this used to be withheld. hidapi's LIBUSB backend was
-// compiled into this library (src/hid.c) and runs a read thread per open device,
-// so that thread's entry point sat inside the .so that dlclose() unmaps. It now
-// links the system -lhidapi-hidraw instead, as fpp-kfmt already did: the hidraw
-// backend is a thin wrapper over read/write/ioctl on /dev/hidraw*, starts no
-// threads, and lives in libhidapi-hidraw.so, which is never unloaded. This .so
-// therefore defines no hid_* symbol and makes no pthread_create call of its own
-// - check with:  nm -D libfpp-vastfmt.so | grep -E ' hid_|pthread_create'
+// This plugin now runs a worker thread - every exchange with the transmitter
+// happens there, so a slow I2C or USB transfer never blocks fppd's main loop
+// or a drogon thread. The thread's body is this plugin's own code and touches
+// every member, so it has to be stopped and joined while the object is still
+// whole, and before the library it lives in can be unmapped.
+//
+// shutdown() therefore: withdraws the HTTP routes, which does not return until
+// no request is executing in the handler and the handler object has been
+// destroyed, so nothing can queue new work afterwards; then stops and joins
+// the worker; then closes the transmitter. A handler blocked waiting on a job
+// cannot outlive the worker, and cannot wake holding a freed device.
+//
+// It registers no timers, issues no CurlManager requests, holds no epoll
+// descriptors and adds no commands.
+//
+// The USB HID path is why unload used to be withheld entirely. hidapi's LIBUSB
+// backend was compiled into this library (src/hid.c) and runs a read thread per
+// open device, so that thread's entry point sat inside the .so that dlclose()
+// unmaps. It now links the system -lhidapi-hidraw instead, as fpp-kfmt already
+// did: the hidraw backend is a thin wrapper over read/write/ioctl on
+// /dev/hidraw*, starts no threads of its own, and lives in libhidapi-hidraw.so,
+// which is never unloaded. This .so therefore defines no hid_* symbol - it only
+// imports them - and the one thread it starts is the worker above, which
+// shutdown() joins. Check with:
+//   nm -D libfpp-vastfmt.so | grep ' hid_'   -> every line must be U, not T
 //
 // The I2C path never had any of this.
 FPP_PLUGIN_SUPPORTS_UNLOAD()
