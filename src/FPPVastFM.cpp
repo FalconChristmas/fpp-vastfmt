@@ -95,12 +95,15 @@ public:
 #ifdef PLATFORM_PI
                 pin = "P1-07";
 #elif defined(PLATFORM_BBB) || defined(PLATFORM_BB64)
+                // Pin names on these boards use a hyphen: "P1-04", not
+                // "P1_04". The underscore spelling matches nothing, so
+                // getPinByName() handed back a null pin. An unconditional
+                // assignment here also made both branches dead code.
                 if (getBeagleBoneType() == BeagleBoneType::PocketBeagle) {
-                    pin = "P1_04";
+                    pin = "P1-04";
                 } else {
                     pin = "P9-22";
                 }
-                pin = "P1_04";
 #endif
             }
             if (pin[0] >= '0' && pin[0] <= '9') {

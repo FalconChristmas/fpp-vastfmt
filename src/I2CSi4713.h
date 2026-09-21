@@ -19,6 +19,7 @@ public:
     virtual void reset() override;
     virtual std::string getASQ() override;
     virtual std::string getTuneStatus() override;
+    virtual bool readTuneStatus(int &freq, int &power, int &antCapRaw) override;
     
     
 protected:

@@ -39,7 +39,16 @@
 #endif
 
 I2CSi4713::I2CSi4713(const std::string &gpioPin) {
+    // getPinByName() returns a null-object for a name the platform does not
+    // have, and its ptr() is nullptr. Settings now apply without an fppd
+    // restart, so an unknown reset pin typed into the web UI used to take fppd
+    // down from under a running show rather than just failing to start.
     resetPin = PinCapabilities::getPinByName(gpioPin).ptr();
+    if (resetPin == nullptr) {
+        LogErr(VB_PLUGIN, "Si4713/I2C: reset pin \"%s\" is not a pin on this board; "
+                          "transmitter not started\n", gpioPin.c_str());
+        return;
+    }
     resetPin->configPin("gpio", "out");
     resetPin->setValue(1);
     std::this_thread::sleep_for(std::chrono::microseconds(200000));
@@ -107,6 +116,18 @@ std::string I2CSi4713::getASQ() {
     r += " dBfs";
     return r;
 }
+bool I2CSi4713::readTuneStatus(int &freq, int &power, int &antCapRaw) {
+    std::vector<uint8_t> out;
+    out.resize(8);
+    if (!sendSi4711Command(SI4710_CMD_TX_TUNE_STATUS, {0x1}, out)) {
+        return false;
+    }
+    freq = out[2] << 8 | out[3];
+    power = out[5];
+    antCapRaw = out[6];
+    return true;
+}
+
 std::string I2CSi4713::getTuneStatus() {
     std::vector<uint8_t> out;
     out.resize(8);
@@ -123,7 +144,7 @@ std::string I2CSi4713::getTuneStatus() {
 }
 bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data, bool ignoreFailures) {
     LogDebug(VB_PLUGIN, "Sending command %X    datasize: %d (no resp)(if: %d)\n", cmd, data.size(), ignoreFailures);
-    int i = i2c->writeBlockData(cmd, &data[0], data.size());
+    int i = i2c->writeBlockData(cmd, data.empty() ? nullptr : &data[0], data.size());
     std::this_thread::sleep_for(std::chrono::microseconds(10000));
     uint8_t out[1];
     i = i2c->readI2CBlockData(0x00, out, 1);
@@ -131,7 +152,7 @@ bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data,
     if (cmd == SI4710_CMD_POWER_UP || cmd == SI4710_CMD_TX_TUNE_FREQ) {
         for (int x = 0; x < 100; x++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
-            int i2 = i2c->writeBlockData(SI4710_CMD_GET_INT_STATUS, &data[0], 0);
+            int i2 = i2c->writeBlockData(SI4710_CMD_GET_INT_STATUS, nullptr, 0);
             i2 = i2c->readI2CBlockData(0x00, out, 1);
             LogExcess(VB_PLUGIN, "   resp %X\n", (int)out[0]);
             if (cmd == SI4710_CMD_POWER_UP) {
@@ -148,7 +169,7 @@ bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data,
     } else if (SI4710_CMD_GET_INT_STATUS == 0x14 && !(out[0] & 0x80)) {
         for (int x = 0; x < 10; x++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(3));
-            int i2 = i2c->writeBlockData(SI4710_CMD_GET_INT_STATUS, &data[0], 0);
+            int i2 = i2c->writeBlockData(SI4710_CMD_GET_INT_STATUS, nullptr, 0);
             i2 = i2c->readI2CBlockData(0x00, out, 1);
             LogExcess(VB_PLUGIN, "   resp %X\n", (int)out[0]);
             if (out[0] & 0x80) {
@@ -166,7 +187,7 @@ bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data,
 
 bool I2CSi4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data, std::vector<uint8_t> &out, bool ignoreFailures) {
     LogDebug(VB_PLUGIN, "Sending command %X    datasize: %d     toRead:  %d   if: %d\n", cmd, data.size(), out.size(), ignoreFailures);
-    int i = i2c->writeBlockData(cmd, &data[0], data.size());
+    int i = i2c->writeBlockData(cmd, data.empty() ? nullptr : &data[0], data.size());
     if (!ignoreFailures && i < 0) {
         return false;
     }
