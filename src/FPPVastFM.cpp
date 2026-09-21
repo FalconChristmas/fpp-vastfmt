@@ -146,6 +146,31 @@ public:
             std::string rev = si4713->getRev();
             LogInfo(VB_PLUGIN, "VAST-FMT: %s\n", rev.c_str());
 
+            // A transmitter whose I2C side answers but whose core never comes
+            // up reports no part number, and everything after this point
+            // then "succeeds" against a chip that is not running - settings
+            // apply, the log looks normal, and nothing is transmitted. Say so
+            // instead. The family is checked rather than one part: the bare
+            // modules are Si4713 and the USB adapter carries an Si4711.
+            partNumber = si4713->readPartNumber();
+            if (partNumber < 0) {
+                LogErr(VB_PLUGIN, "VAST-FMT: no part number from the transmitter - "
+                       "it answers but never powers up. Check its supply and "
+                       "reference clock, or try another module.\n");
+                delete si4713;
+                si4713 = nullptr;
+                return false;
+            }
+            if (partNumber < 10 || partNumber > 13) {
+                LogWarn(VB_PLUGIN, "VAST-FMT: unexpected part number %d - "
+                        "continuing, but this may not be an Si471x\n", partNumber);
+            } else {
+                LogInfo(VB_PLUGIN, "VAST-FMT: part is %s%s\n",
+                        Si4713::partName(partNumber),
+                        Si4713::supportsNoiseMeasure(partNumber)
+                            ? "" : " (no received-noise measurement on this part)");
+            }
+
             return true;
         }
 
@@ -404,6 +429,8 @@ public:
     Json::Value statusJsonLocked() {
         Json::Value root;
         root["connection"] = settings["Connection"];
+        root["part"] = (partNumber >= 0) ? Si4713::partName(partNumber) : "unknown";
+        root["partNumber"] = partNumber;
         root["running"] = (si4713 != nullptr);
         root["rdsEnabled"] = rdsEnabled;
         int configured = safeStoi(settings["AntCap"], 0, "AntCap");
@@ -514,6 +541,7 @@ public:
     }
     
     Si4713 *si4713 = nullptr;
+    int partNumber = -1;
 };
 
 

@@ -26,6 +26,15 @@ public:
     // zeros. Returns false if the status could not be read.
     virtual bool readTuneStatus(int &freq, int &power, int &antCapRaw) = 0;
 
+    // GET_REV's part number. 10-13 are the Si4710/11/12/13 family; the bare
+    // modules are 4713 and the V-FMT212R carries a 4711. Returns -1 if it
+    // could not be read at all, which is what a dead part looks like.
+    virtual int readPartNumber();
+    static const char *partName(int pn);
+    // Only the 4713 implements the received-noise measurement; the 4711 in the
+    // USB adapter answers TX_TUNE_MEASURE with the error bit set.
+    static bool supportsNoiseMeasure(int pn) { return pn == 13; }
+
     // Was the last automatic antenna-cap search able to find a match? The
     // search rails to the end of its range when it cannot, which is the chip
     // saying the antenna is not resonant anywhere near this frequency.

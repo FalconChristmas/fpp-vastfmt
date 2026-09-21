@@ -90,6 +90,8 @@
 
 // GET_INT_STATUS
 #define GET_INT_STATUS 0x14
+// GET_REV
+#define GET_REV 0x10
 #define STATUS_BIT_STCINT 0x01
 
 
@@ -101,6 +103,30 @@ Si4713::Si4713() {
 Si4713::~Si4713() {
 }
 
+
+const char *Si4713::partName(int pn) {
+    switch (pn) {
+        case 10: return "Si4710";
+        case 11: return "Si4711";
+        case 12: return "Si4712";
+        case 13: return "Si4713";
+        default: return "unknown";
+    }
+}
+
+// GET_REV returns the status byte followed by the part number. Both transports
+// carry this command, so the default works for either.
+int Si4713::readPartNumber() {
+    std::vector<uint8_t> out(9);
+    if (!sendSi4711Command(GET_REV, {0x00}, out, true)) {
+        return -1;
+    }
+    int pn = out[1];
+    if (pn == 0x00 || pn == 0xFF) {
+        return -1;
+    }
+    return pn;
+}
 
 void Si4713::Init() {
     std::string rev = getRev();
