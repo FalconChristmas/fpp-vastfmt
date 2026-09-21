@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include <unistd.h>
 #include <termios.h>
@@ -12,6 +13,7 @@
 #include "settings.h"
 #include "Plugin.h"
 #include "log.h"
+#include "fpphttp.h"
 
 #include "VASTFMT.h"
 #include "I2CSi4713.h"
@@ -44,10 +46,19 @@ static void padTo(std::string &s, int l) {
     }
 }
 
-class FPPVastFMPlugin : public FPPPlugins::Plugin, public FPPPlugins::PlaylistEventPlugin {
+class FPPVastFMPlugin : public FPPPlugins::Plugin,
+                        public FPPPlugins::PlaylistEventPlugin,
+                        public FPPPlugins::APIProviderPlugin {
 public:
     bool enabled = true;
     bool rdsEnabled = false;
+
+    // Everything that touches the transmitter takes this. Until the status API
+    // existed the device was only ever reached from fppd's own callbacks, one
+    // at a time; an HTTP handler runs on a drogon thread and would otherwise
+    // be talking to the same USB or I2C device midway through a playlist
+    // callback doing the same.
+    std::mutex deviceLock;
     // The "true" asks FPP to watch config/plugin.fpp-vastfmt and call
     // settingChanged() below, so retuning the transmitter no longer needs an
     // fppd restart.
@@ -66,6 +77,7 @@ public:
     // releases the I2C bus or the USB device promptly when the plugin is
     // uninstalled. Everything here is synchronous, so no readiness predicate.
     virtual std::function<bool()> shutdown() override {
+        unregisterApis();
         closeDevice();
         return nullptr;
     }
@@ -76,6 +88,7 @@ public:
 
     // Idempotent, so shutdown() and the destructor can both call it.
     void closeDevice() {
+        std::lock_guard<std::mutex> lk(deviceLock);
         if (si4713 != nullptr) {
             //si4713->powerDown();
             delete si4713;
@@ -208,6 +221,7 @@ public:
     // Called by FPP when config/plugin.fpp-vastfmt changes; the base class has
     // already updated settings[key].
     virtual void settingChanged(const std::string &key, const std::string &value) override {
+        std::lock_guard<std::mutex> lk(deviceLock);
         if (key == "Start" || key == "Stop" || key == "EnableVolumeChangeHack") {
             // Read at point of use in the playlist callbacks - nothing to do.
             return;
@@ -320,6 +334,7 @@ public:
     
 
     virtual void playlistCallback(const Json::Value &playlist, const std::string &action, const std::string &section, int item) {
+        std::lock_guard<std::mutex> lk(deviceLock);
         if (action == "stop" && rdsEnabled) {
             formatAndSendText(settings["StationText"], "", "", true);
             formatAndSendText(settings["RDSTextText"], "", "", false);
@@ -332,6 +347,7 @@ public:
         
     }
     virtual void mediaCallback(const Json::Value &playlist, const MediaDetails &mediaDetails) {
+        std::lock_guard<std::mutex> lk(deviceLock);
         if (!rdsEnabled) {
             return;
         }
@@ -367,6 +383,104 @@ public:
     }
     
     
+
+    // ---------------------------------------------------------------------
+    // Status API
+    // ---------------------------------------------------------------------
+
+    virtual void registerApis() override {
+        auto handler = [this](const HttpRequestPtr &req, HttpCallback &&cb) {
+            handleApi(req, std::move(cb));
+        };
+        FPPPlugins::registerPluginApi("/vastfmt", handler, {drogon::Get}, false);
+        FPPPlugins::registerPluginApi("/vastfmt/retune", handler, {drogon::Get, drogon::Post}, false);
+    }
+    virtual void unregisterApis() override {
+        FPPPlugins::unregisterPluginApi("/vastfmt");
+        FPPPlugins::unregisterPluginApi("/vastfmt/retune");
+    }
+
+    // Caller holds deviceLock.
+    Json::Value statusJsonLocked() {
+        Json::Value root;
+        root["connection"] = settings["Connection"];
+        root["running"] = (si4713 != nullptr);
+        root["rdsEnabled"] = rdsEnabled;
+        int configured = safeStoi(settings["AntCap"], 0, "AntCap");
+        root["antCapSetting"] = configured;
+        root["antCapAuto"] = (configured == 0);
+        if (si4713 == nullptr) {
+            root["state"] = "not running";
+            return root;
+        }
+        int f = 0, p = 0, c = 0;
+        if (!si4713->readTuneStatus(f, p, c)) {
+            root["state"] = "no response";
+            return root;
+        }
+        root["state"] = "ok";
+        root["frequency"] = f / 100.0;
+        root["power"] = p;
+        root["antCap"] = c;
+        root["antCapPf"] = c * 0.25;
+        root["matchOk"] = Si4713::antennaMatchOk(c);
+        root["asq"] = si4713->getASQ();
+        return root;
+    }
+
+    // Run a one-off automatic antenna search and report what it picked,
+    // without committing it. Someone who has set the capacitor by hand has
+    // turned the automatic search off, so this is the only way for them to
+    // find out what it would choose - which is the whole point of the button.
+    // The configured value is put back afterwards so a show is not left on a
+    // different setting than the page shows.
+    Json::Value retuneLocked() {
+        Json::Value root;
+        if (si4713 == nullptr) {
+            root["ok"] = false;
+            root["error"] = "transmitter is not running";
+            return root;
+        }
+        int power = Si4713::clampPower(safeStoi(settings["Power"], 110, "Power"));
+        int configured = safeStoi(settings["AntCap"], 0, "AntCap");
+
+        si4713->setTXPower(power, 0);          // 0 = search
+        int found = si4713->lastAntCapRaw();
+
+        if (configured != 0) {
+            si4713->setTXPower(power, configured);   // put their setting back
+        }
+
+        root["ok"] = true;
+        root["antCap"] = found;
+        root["antCapPf"] = found * 0.25;
+        root["matchOk"] = Si4713::antennaMatchOk(found);
+        root["restored"] = configured;
+        root["message"] = Si4713::antennaMatchOk(found)
+            ? "Automatic tuning found a match."
+            : "Automatic tuning found no match - the antenna is probably not "
+              "resonant near this frequency. Set the capacitor by hand.";
+        Json::Value st = statusJsonLocked();
+        for (const auto &k : st.getMemberNames()) {
+            root[k] = st[k];
+        }
+        return root;
+    }
+
+    void handleApi(const HttpRequestPtr &req, HttpCallback &&callback) {
+        const std::string path = req->path();
+        Json::Value root;
+        {
+            std::lock_guard<std::mutex> lk(deviceLock);
+            if (path.find("retune") != std::string::npos) {
+                root = retuneLocked();
+            } else {
+                root = statusJsonLocked();
+            }
+        }
+        callback(makeStringResponse(root.toStyledString(), 200, "application/json"));
+    }
+
     void setDefaultSettings() {
         setIfNotFound("Start", "FPPDStart");
         setIfNotFound("Frequency", "100.10");
@@ -404,8 +518,14 @@ public:
 
 
 // Safe to dlclose() on unload: this plugin starts no threads, registers no
-// timers, issues no CurlManager requests, holds no epoll descriptors, adds no
-// commands and serves no HTTP routes. shutdown() closes the transmitter -
+// timers, issues no CurlManager requests, holds no epoll descriptors and adds
+// no commands. It does serve HTTP routes, and shutdown() gives them back with
+// unregisterPluginApi() before anything else - that call does not return until
+// no request is executing inside the handler and the handler object itself has
+// been destroyed, which is what makes unmapping this library safe. It runs
+// before the device is closed so a handler already waiting on deviceLock
+// cannot be left holding a freed transmitter. shutdown() closes the
+// transmitter -
 // hid_close() for the USB part, which also releases the device rather than
 // holding it until fppd restarts.
 //
