@@ -339,6 +339,19 @@ std::string VASTFMT::getASQ() {
     }
     return "";
 }
+bool VASTFMT::readTuneStatus(int &freq, int &power, int &antCapRaw) {
+    std::vector<uint8_t> out;
+    // Deliberately the adapter's own request rather than a raw TX_TUNE_STATUS:
+    // that command through the Si4711Access passthrough returns zeros.
+    if (!sendDeviceCommand(RequestSi4711TuneStatus, out) || out.size() < 5) {
+        return false;
+    }
+    freq = out[1] << 8 | out[2];
+    power = out[3];
+    antCapRaw = out[4];
+    return true;
+}
+
 std::string VASTFMT::getTuneStatus() {
     std::vector<uint8_t> out;
     if (sendDeviceCommand(RequestSi4711TuneStatus, out)) {

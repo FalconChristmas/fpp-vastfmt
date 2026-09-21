@@ -2,6 +2,8 @@
 
 #include <cstring>
 #include <ctime>
+#include <chrono>
+#include <thread>
 
 #include "log.h"
 
@@ -86,6 +88,10 @@
 // TX_RDS_PS
 #define TX_RDS_PS 0x36
 
+// GET_INT_STATUS
+#define GET_INT_STATUS 0x14
+#define STATUS_BIT_STCINT 0x01
+
 
 
 Si4713::Si4713() {
@@ -113,18 +119,110 @@ void Si4713::Init() {
 }
 
 
+// The chip acknowledges a tune long before it acts on it: the status readback
+// keeps reporting the PREVIOUS tune for about 140ms, measured on a V-FMT212.
+// Reading it straight away is why a retune could report the frequency and
+// antenna cap of the last session - the plugin would log 101.1 MHz while its
+// own configuration said 87.9, and an operator reasonably reads that as the
+// tune having failed.
+//
+// Waiting for the readback to match what we asked for needs no interrupt
+// handshake, so it behaves the same on both transports. (STCINT would have
+// been the tidier signal, but it is only cleared by TX_TUNE_STATUS with
+// INTACK, and that command returns zeros through the USB adapter's raw
+// passthrough - so the flag stays latched from the previous tune and any wait
+// on it returns immediately.)
+bool Si4713::waitForTune(int wantFreq, int timeoutMs) {
+    for (int waited = 0; waited < timeoutMs; waited += 20) {
+        int f = 0, p = 0, c = 0;
+        if (readTuneStatus(f, p, c) && f == wantFreq) {
+            lastAntCap = c;
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    LogWarn(VB_PLUGIN, "Si4713: tune to %d.%02d MHz did not take effect within %d ms\n",
+            wantFreq / 100, wantFreq % 100, timeoutMs);
+    return false;
+}
+
+// After TX_TUNE_POWER the frequency does not change, so there is no new value
+// to wait for - and the stale reading is itself perfectly stable while the
+// chip works, so simply polling "until it stops moving" locks onto the OLD
+// value. Ride out the readback lag first, then require the reading to hold
+// still. (This is not theoretical: an earlier version of this wait reported a
+// hand-set cap of 64 as 2, because it sampled only within the lag window.)
+void Si4713::settleAfterPowerChange() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    int same = 0, lastCap = -999, lastPow = -999;
+    for (int waited = 0; waited < 600; waited += 20) {
+        int f = 0, p = 0, c = 0;
+        if (readTuneStatus(f, p, c)) {
+            if (c == lastCap && p == lastPow) {
+                if (++same >= 3) {
+                    lastAntCap = c;
+                    return;
+                }
+            } else {
+                same = 0;
+                lastCap = c;
+                lastPow = p;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    if (lastCap != -999) {
+        lastAntCap = lastCap;
+    }
+}
+
 void Si4713::setFrequency(int frequency) {
     uint8_t ft = frequency>>8;
     uint8_t fl = 0x00FF & frequency;
+    lastFreq = frequency;
     sendSi4711Command(TX_TUNE_FREQ, {0x00, ft, fl});
+    // TX_TUNE_FREQ runs its own antenna-cap search, so the cap can change here
+    // even though only the frequency was asked for.
+    waitForTune(frequency, 800);
 }
+int Si4713::clampPower(int power) {
+    if (power <= 0) {
+        return 0;               // 0 is valid and means "PA off"
+    }
+    if (power < 88) {
+        return 88;
+    }
+    if (power > 120) {
+        return 120;
+    }
+    return power;
+}
+
 void Si4713::setTXPower(int power, double antCap) {
     uint8_t rfcap0 = antCap;
     if (rfcap0 > 191) {
         rfcap0 = 191;
     }
-    uint8_t p = power & 0xff;
+    int clamped = clampPower(power);
+    if (clamped != power) {
+        LogWarn(VB_PLUGIN, "Si4713: transmit power %d is out of range, using %d dBuV\n",
+                power, clamped);
+    }
+    uint8_t p = clamped & 0xff;
+    // With rfcap0 == 0 this command runs the automatic antenna-cap search, so
+    // it is the one whose result is worth waiting for and checking.
     sendSi4711Command(TX_TUNE_POWER, {0x00, 0x00, p, rfcap0});
+    settleAfterPowerChange();
+    if (rfcap0 == 0 && lastAntCap >= 0 && !antennaMatchOk(lastAntCap)) {
+        LogWarn(VB_PLUGIN,
+                "Si4713: automatic antenna tuning found no match (cap %d of 1-191). "
+                "The antenna is probably not resonant near %d.%02d MHz; try setting "
+                "the antenna capacitor by hand.\n",
+                lastAntCap, lastFreq / 100, lastFreq % 100);
+    } else if (rfcap0 == 0 && lastAntCap >= 0) {
+        LogInfo(VB_PLUGIN, "Si4713: automatic antenna tuning selected cap %d (%0.2f pF)\n",
+                lastAntCap, lastAntCap * 0.25);
+    }
 }
 
 bool Si4713::sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data, bool ignoreFailures) {
