@@ -20,11 +20,12 @@
     }
 ?>
 
+<?php $vfmFreqNote = "Not sure which frequency to use? <a href=\"https://radio-locator.com/cgi-bin/vacant\" target=\"_blank\" rel=\"noopener noreferrer\">radio-locator.com</a> lists the vacant FM channels for your area."; ?>
 <div id="global" class="settings">
 <?
 PrintSettingGroup("VASTFMTHardware", "", "", 1, "fpp-vastfmt");
 PrintSettingGroup("VASTFMTPlugin", "", "", 1, "fpp-vastfmt");
-PrintSettingGroup("VASTFMTRadio", "", "", 1, "fpp-vastfmt");
+PrintSettingGroup("VASTFMTRadio", "", $vfmFreqNote, 1, "fpp-vastfmt");
 PrintSettingGroup("VASTFMTRDS", "", "", 1, "fpp-vastfmt");
 ?>
 </div>

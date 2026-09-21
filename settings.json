@@ -96,7 +96,7 @@
         "Frequency": {
             "name": "Frequency",
             "description": "FM Frequency",
-            "tip": "FM frequency to broadcast on, 76.00 to 108.00 MHz. Pick a channel that is clear where you live; changing this re-runs the antenna tuning.",
+            "tip": "FM frequency to broadcast on, 76.00 to 108.00 MHz. Pick a channel that is clear where you live - radio-locator.com has a vacant-channel search that lists the unused ones for your area. Changing this re-runs the antenna tuning.",
             "restart": 0,
             "reboot": 0,
             "type": "text",
