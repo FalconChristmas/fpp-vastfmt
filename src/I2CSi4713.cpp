@@ -49,22 +49,57 @@ I2CSi4713::I2CSi4713(const std::string &gpioPin) {
                           "transmitter not started\n", gpioPin.c_str());
         return;
     }
-    resetPin->configPin("gpio", "out");
-    resetPin->setValue(1);
-    std::this_thread::sleep_for(std::chrono::microseconds(200000));
-    resetPin->setValue(0);
-    std::this_thread::sleep_for(std::chrono::microseconds(200000));
-    resetPin->setValue(1);
-    std::this_thread::sleep_for(std::chrono::microseconds(300000));
-    i2c = new I2CUtils(I2CBUS, 0x63);
-    if (i2c->isOk()) {
-        sendSi4711Command(SI4710_CMD_POWER_UP, {0x12, 0x50});
-        std::this_thread::sleep_for(std::chrono::microseconds(200000));
-        setProperty(SI4713_PROP_REFCLK_FREQ, 32768);
-    } else {
-        delete i2c;
-        i2c = nullptr;
+    // Reset, then check the chip actually came back, and try again with a
+    // longer settle if it did not. Two real failures hide behind a reset that
+    // is fired and assumed:
+    //
+    //   - GPIO lines are exclusive. If anything else already holds the reset
+    //     pin - a leftover gpioset, a hand-rolled hold service, a previous
+    //     process - FPP cannot drive it, the chip stays in reset, and nothing
+    //     here would have noticed.
+    //   - A fixed settle is a guess. A board whose supply ramps slowly can
+    //     need longer than one, and the failure then looks like broken
+    //     hardware rather than an impatient driver.
+    //
+    // A chip that is out of reset and talking answers a bare read with CTS
+    // set, whether or not it has been powered up yet, so that is the check.
+    for (int attempt = 1; attempt <= 3 && i2c == nullptr; attempt++) {
+        resetPin->configPin("gpio", "out");
+        resetPin->setValue(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        resetPin->setValue(0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        resetPin->setValue(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300 * attempt));
+
+        I2CUtils *bus = new I2CUtils(I2CBUS, 0x63);
+        uint8_t status = 0;
+        if (bus->isOk() && bus->readI2CBlockData(0x00, &status, 1) >= 0 &&
+            (status & 0x80)) {
+            i2c = bus;
+            if (attempt > 1) {
+                LogInfo(VB_PLUGIN, "Si4713/I2C: chip answered after reset attempt %d\n",
+                        attempt);
+            }
+            break;
+        }
+        delete bus;
+        LogWarn(VB_PLUGIN, "Si4713/I2C: no answer after reset attempt %d of 3\n", attempt);
     }
+
+    if (i2c == nullptr) {
+        LogErr(VB_PLUGIN, "Si4713/I2C: the transmitter is not answering after reset. "
+               "It is most likely still held in reset: check that reset pin \"%s\" is "
+               "the right one, and that nothing else holds it - GPIO lines are "
+               "exclusive, so a leftover gpioset or another service stops FPP driving "
+               "it (\"gpioinfo | grep -i consumer\" shows who has it).\n",
+               gpioPin.c_str());
+        return;
+    }
+
+    sendSi4711Command(SI4710_CMD_POWER_UP, {0x12, 0x50});
+    std::this_thread::sleep_for(std::chrono::microseconds(200000));
+    setProperty(SI4713_PROP_REFCLK_FREQ, 32768);
 }
 I2CSi4713::~I2CSi4713() {
     if (i2c) {

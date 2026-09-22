@@ -110,7 +110,14 @@ This is where most of the surprises live.
    nothing drives it, the chip does not appear in `i2cdetect` at all — absence
    there is *not* evidence of a dead part. Driving the pin low and watching the
    address vanish is a good way to confirm you have the right pin.
-4. **Garbage or shifting values from every register** usually means something
+4. **GPIO lines are exclusive, and that is a real failure mode.** FPP holds the
+   reset line for as long as the plugin is loaded — `gpioinfo` shows it as
+   `output consumer="FPPD"`. If anything else already has it (a leftover
+   `gpioset`, a hand-rolled hold service, a previous process), FPP cannot drive
+   it, the chip stays in reset, and nothing before the part-number check
+   notices. A working module in this state looks exactly like a dead one, so
+   check `gpioinfo | grep -i consumer` before suspecting the hardware.
+5. **Garbage or shifting values from every register** usually means something
    else owns the bus. fppd holds the device whenever the plugin is loaded —
    *stop fppd before running any standalone probe.*
 

@@ -276,9 +276,27 @@ public:
             // modules are Si4713 and the USB adapter carries an Si4711.
             partNumber = si4713->readPartNumber();
             if (partNumber < 0) {
-                LogErr(VB_PLUGIN, "VAST-FMT: no part number from the transmitter - "
-                       "it answers but never powers up. Check its supply and "
-                       "reference clock, or try another module.\n");
+                // Two very different causes, so say which one to look at first.
+                // On I2C the likeliest is that the chip is still in reset: GPIO
+                // lines are exclusive, so if anything else already holds the
+                // reset pin - a stray gpioset, a service, a previous process -
+                // FPP cannot drive it, the chip never comes out of reset and
+                // never answers, and nothing above here would have noticed.
+                // Sending someone to replace a working module over that is the
+                // wrong first move.
+                if (settings["Connection"] == "I2C") {
+                    LogErr(VB_PLUGIN, "VAST-FMT: no part number from the transmitter. "
+                           "It is probably still in reset: check that reset pin \"%s\" is "
+                           "correct and that nothing else holds it - GPIO lines are "
+                           "exclusive, so a leftover gpioset or another service stops FPP "
+                           "driving it ('gpioinfo | grep -i consumer' will show who has "
+                           "it). Failing that, check the module's supply and reference "
+                           "clock.\n", settings["ResetPin"].c_str());
+                } else {
+                    LogErr(VB_PLUGIN, "VAST-FMT: no part number from the transmitter - "
+                           "it answers but never powers up. Check its supply and "
+                           "reference clock, or try another module.\n");
+                }
                 delete si4713;
                 si4713 = nullptr;
                 return false;
