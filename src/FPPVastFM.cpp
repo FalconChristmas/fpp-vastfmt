@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "Plugin.h"
 #include "log.h"
+#include "Player.h"
 #include "fpphttp.h"
 
 #include "VASTFMT.h"
@@ -126,6 +127,12 @@ public:
                 startVast();
             } else if (settings["Start"] == "RDSOnly") {
                 startVastForRDS();
+            } else if (settings["Start"] == "PlaylistStart" &&
+                       Player::INSTANCE.IsPlaying()) {
+                // Loaded into a show already in progress - the "start" for it
+                // happened before this plugin existed and will not come again.
+                playlistActive = true;
+                startVast();
             }
         });
     }
@@ -513,6 +520,9 @@ public:
     
 
     virtual void playlistCallback(const Json::Value &playlist, const std::string &action, const std::string &section, int item) {
+        LogInfo(VB_PLUGIN, "VAST-FMT: playlistCallback action=%s section=%s item=%d\n",
+                action.c_str(), section.c_str(), item);
+
         if (action == "start" || action == "playing") {
             playlistActive = true;
             mpcTitle.clear();   // the playlist's own media data takes over
@@ -526,7 +536,15 @@ public:
                 formatAndSendText(effectiveStationText(), "", "", true);
                 formatAndSendText(effectiveRdsText(), "", "", false);
             }
-            if (settings["Start"] == "PlaylistStart" && act == "start") {
+            // FPP only sends "start" when the player was idle. Anything else
+            // - a playlist started while one is already running, "Start
+            // Playlist At Item", advancing sections - arrives as "playing".
+            // Matching only "start" is why Start At Playlist did nothing while
+            // FPPD Start worked: the callback fired, just never with the word
+            // this was looking for. startVast() is a no-op once the device is
+            // open, so taking both is safe.
+            if (settings["Start"] == "PlaylistStart" &&
+                    (act == "start" || act == "playing")) {
                 startVast();
             } else if (settings["Stop"] == "PlaylistStop" && act == "stop") {
                 stopVast();

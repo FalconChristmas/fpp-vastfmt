@@ -121,6 +121,21 @@ This is where most of the surprises live.
    else owns the bus. fppd holds the device whenever the plugin is loaded —
    *stop fppd before running any standalone probe.*
 
+## Playlist callbacks
+
+FPP sends `action == "start"` **only** when the player was idle. A playlist
+started while another is running, "Start Playlist At Item", and advancing
+sections all arrive as `"playing"` — `Playlist.cpp` picks between them with
+`origStatus == FPP_STATUS_PLAYLIST_PLAYING`, and several call sites send
+`"playing"` unconditionally. `"start"` itself comes from the media path, not
+the playlist one.
+
+Anything keyed to starting must therefore accept both. Matching only `"start"`
+is why *Start at: Playlist Start* did nothing for a user while *FPPD Start*
+worked perfectly: the callback fired every time, just never with the word the
+code was looking for, and nothing was logged to say so. The callback now logs
+its action, which is what makes this visible in a log at all.
+
 ## Reset pin
 
 I2C only. The setting is a menu built from the board's own pin list. Cape
