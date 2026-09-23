@@ -523,6 +523,19 @@ public:
         LogInfo(VB_PLUGIN, "VAST-FMT: playlistCallback action=%s section=%s item=%d\n",
                 action.c_str(), section.c_str(), item);
 
+        // FPP builds before the Playlist.cpp fix send one more "playing"
+        // immediately after "stop", as the player goes idle. Taking that at
+        // face value undoes the stop - with Stop at: Playlist Stop, the
+        // transmitter came straight back up after a show ended. Belt and
+        // suspenders for those builds: only treat it as a start if the player
+        // really is playing.
+        if ((action == "start" || action == "playing") &&
+                !Player::INSTANCE.IsPlaying()) {
+            LogInfo(VB_PLUGIN, "VAST-FMT: ignoring \"%s\" - the player is not playing\n",
+                    action.c_str());
+            return;
+        }
+
         if (action == "start" || action == "playing") {
             playlistActive = true;
             mpcTitle.clear();   // the playlist's own media data takes over
