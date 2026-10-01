@@ -59,6 +59,9 @@ class FPPVastFMPlugin : public FPPPlugins::Plugin,
 public:
     bool enabled = true;
     bool rdsEnabled = false;
+    // Opened only to feed RDS to a transmitter that keys its own carrier
+    // ("Never - RDS Only"). Stopping must then leave the carrier alone.
+    bool rdsOnly = false;
 
     // The transmitter is reached from one thread and one thread only. Callers
     // - playlist and media callbacks, settings changes, HTTP handlers - put
@@ -216,13 +219,12 @@ public:
         return job;
     }
 
-    // Called with the worker stopped, so it needs no lock of its own.
+    // Called with the worker stopped, so it needs no lock of its own. Powers
+    // the transmitter down like any other stop: with nothing left feeding it
+    // audio, a carrier left up would only broadcast silence, and with "Start
+    // at: Playlist Start" it would stay up until a playlist next stopped.
     void closeDevice() {
-        if (si4713 != nullptr) {
-            //si4713->powerDown();
-            delete si4713;
-            si4713 = nullptr;
-        }
+        stopVast();
     }
 
     bool initVast() {
@@ -343,6 +345,7 @@ public:
                 f *= 100;
                 si4713->setFrequency(f);
 
+                rdsOnly = false;
                 f = safeStoi(settings["AntCap"], 0, "AntCap");
                 si4713->setTXPower(safeStoi(settings["Power"], 110, "Power"), f);
                 
@@ -364,6 +367,7 @@ public:
     void startVastForRDS() {
         if (si4713 == nullptr) {
             if (initVast()) {
+                rdsOnly = true;
                 rdsEnabled = settings["EnableRDS"] == "True";
                 if (rdsEnabled) {
                     initRDS();
@@ -447,9 +451,14 @@ public:
         return defVal;
     }
 
+    // Deleting the device object only closes the connection; the chip goes on
+    // transmitting until it is told otherwise. Leaving this out is why "Stop
+    // at: Playlist Stop" never took the carrier down.
     void stopVast() {
         if (si4713 != nullptr) {
-            //si4713->powerDown();
+            if (!rdsOnly) {
+                si4713->powerDown();
+            }
             delete si4713;
             si4713 = nullptr;
         }

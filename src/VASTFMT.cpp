@@ -109,11 +109,12 @@ bool VASTFMT::isOk() {
     return phd != nullptr;
     
 }
-bool VASTFMT::sendDeviceCommand(uint8_t cmd, bool ignoreFailures) {
+bool VASTFMT::sendDeviceCommand(uint8_t cmd, bool ignoreFailures, int timeoutMs) {
     std::vector<uint8_t> out;
-    return sendDeviceCommand(cmd, out, ignoreFailures);
+    return sendDeviceCommand(cmd, out, ignoreFailures, timeoutMs);
 }
-bool VASTFMT::sendDeviceCommand(uint8_t cmd, std::vector<uint8_t> &dataOut, bool ignoreFailures) {
+bool VASTFMT::sendDeviceCommand(uint8_t cmd, std::vector<uint8_t> &dataOut, bool ignoreFailures,
+                                int timeoutMs) {
     unsigned char aucBufIn[43];
     unsigned char aucBufOut[43];
     memset(aucBufOut, 0x00, 43); // Clear out the response buffer
@@ -125,7 +126,7 @@ bool VASTFMT::sendDeviceCommand(uint8_t cmd, std::vector<uint8_t> &dataOut, bool
     aucBufOut[2] = cmd;
     
     hid_write(phd, aucBufOut, 43);
-    int r = hid_read_timeout(phd, aucBufIn, 43, 250);
+    int r = hid_read_timeout(phd, aucBufIn, 43, timeoutMs);
 
     if (r < 2) {
         LogWarn(VB_PLUGIN, "Si4713/USB: not enough data: %d\n", r);
@@ -302,8 +303,12 @@ bool VASTFMT::getProperty(uint16_t prop, uint16_t &val) {
     val = (int16_t ) ((aucBufIn[4] & 0x00FF) << 8) | aucBufIn[5];
     return true;
 }
+// Powering up a chip that is actually off takes the adapter longer to answer
+// than the 250 ms allowed for everything else. Giving up early leaves the reply
+// queued, and the next request then reads it as its own answer. Stopping now
+// powers the chip down, so every start after the first hits this.
 void VASTFMT::powerUp() {
-    sendDeviceCommand(RequestSi4711PowerUp, true);
+    sendDeviceCommand(RequestSi4711PowerUp, true, 2000);
 }
 void VASTFMT::powerDown() {
     sendDeviceCommand(RequestSi4711PowerDown, true);

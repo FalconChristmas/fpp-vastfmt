@@ -114,7 +114,17 @@ bool I2CSi4713::isOk() {
 }
 void I2CSi4713::powerUp() {
 }
+// Deleting this object only closes the bus handle; the chip itself keeps
+// transmitting, so stopping has to say so. POWER_DOWN shuts the core down
+// cleanly, and holding reset low afterwards guarantees the carrier is gone
+// even if the core never acted on it. The next start resets the chip anyway.
 void I2CSi4713::powerDown() {
+    if (i2c) {
+        sendSi4711Command(SI4710_CMD_POWER_DOWN, {}, true);
+    }
+    if (resetPin) {
+        resetPin->setValue(0);
+    }
 }
 void I2CSi4713::reset() {
 }

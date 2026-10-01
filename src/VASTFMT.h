@@ -28,8 +28,9 @@ protected:
     virtual bool setProperty(uint16_t prop, uint16_t val) override;
 
     bool getProperty(uint16_t prop, uint16_t &val);
-    bool sendDeviceCommand(uint8_t cmd, bool ignoreFailures = false);
-    bool sendDeviceCommand(uint8_t cmd, std::vector<uint8_t> &dataOut, bool ignoreFailures = false);
+    bool sendDeviceCommand(uint8_t cmd, bool ignoreFailures = false, int timeoutMs = 250);
+    bool sendDeviceCommand(uint8_t cmd, std::vector<uint8_t> &dataOut, bool ignoreFailures = false,
+                           int timeoutMs = 250);
 
     
 private:

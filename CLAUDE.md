@@ -136,6 +136,25 @@ worked perfectly: the callback fired every time, just never with the word the
 code was looking for, and nothing was logged to say so. The callback now logs
 its action, which is what makes this visible in a log at all.
 
+## Stopping
+
+**Deleting the device object does not stop the transmitter.** On I2C it only
+closes the bus handle; on USB it only closes the HID device. The chip goes on
+transmitting until it is told to power down, which is why *Stop at: Playlist
+Stop* once did nothing. `stopVast()` powers down first, and `closeDevice()`
+goes through it, so unloading the plugin drops the carrier too. On I2C the
+reset pin is then held low, so the carrier is off even if the core ignored
+`POWER_DOWN`.
+
+"Never - RDS Only" is the exception: there the plugin only feeds RDS to a
+transmitter that keys its own carrier, so stopping leaves it alone.
+
+**On USB, powering up a chip that is really off answers slower than the 250 ms
+every other adapter request gets.** A reply that arrives after the timeout is
+read by the *next* request as its own, which shows up as `I2C_READ failed`
+during start. `powerUp()` waits longer for that reason. Before stopping powered
+the chip down this only happened on a cold boot.
+
 ## Reset pin
 
 I2C only. The setting is a menu built from the board's own pin list. Cape
