@@ -144,7 +144,11 @@ function vfmRefreshStatus() {
         vfmSetText('vfmCap', s.antCap + ' (' + s.antCapPf.toFixed(2) + ' pF)'
                    + (s.antCapAuto ? ' \u2014 automatic' : ' \u2014 set by hand'), false);
         vfmSetText('vfmMatch', s.matchOk ? 'ok' : 'no match found', !s.matchOk);
-        vfmSetText('vfmAsq', s.asq || '\u2014', false);
+        // The adapter is not read while its audio is streaming (each request
+        // would put a dropout in the broadcast), so the input level shown
+        // would be from before playback started.
+        vfmSetText('vfmAsq', s.audioPlaying ? 'not read while audio is playing'
+                                            : (s.asq || '\u2014'), false);
       },
       error: function() { vfmSetText('vfmState', 'status unavailable', true); }
     });

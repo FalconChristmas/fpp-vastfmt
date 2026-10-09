@@ -165,6 +165,61 @@ read by the *next* request as its own, which shows up as `I2C_READ failed`
 during start. `powerUp()` waits longer for that reason. Before stopping powered
 the chip down this only happened on a cold boot.
 
+## USB requests stall while audio streams (BeagleBone)
+
+On a BeagleBone (musb host controller, adapter behind a USB hub), **every
+request to the adapter blocks for ~5.1 s while the USB audio stream is
+running**. The adapter acts on the request at once, but the host never
+completes the OUT transfer; the reply only arrives when the kernel gives up at
+its fixed 5 s hidraw timeout. Interrupt OUT and control-endpoint SET_REPORT
+stall identically, so it is the host controller, not the endpoint type. With
+no audio streaming, requests take ~10 ms.
+
+**Every stall that times out leaves a small dropout in the broadcast
+audio.** The kernel cancels the transfer, and cancelling disturbs the
+isochronous stream. Measured off-air against the source track, an 18-request RadioText
+update sent mid-song slipped the audio by ~80 ms in 10 ms steps.
+
+**So do not work around it by cancelling early.** Going through usbfs with a
+15-50 ms timeout does get every reply back in ~70 ms, but at that rate the
+cancellations garble the broadcast for as long as they continue.
+
+Disabling audio on the adapter (its AudioDisable request) does not help
+either: the chip stops hearing it, but requests still stall for as long as
+the USB stream runs. The stream itself has to stop.
+
+What the plugin does is stop it, briefly, between songs:
+
+- **RDS for a new track is sent with the USB stream paused.**
+  `mediaCallback()` runs on FPP's playlist thread before the media opens,
+  while the previous song's stream is still open and idle. It hands the
+  update to the worker (which owns the device) and waits, up to 15 s. On the
+  worker, `QuietUsbAudio` pauses the card's PipeWire sink
+  (`pw-cli c fpp_alsa_<card id> Pause '{}'`), which stops the USB stream in
+  ~0.2 s without tearing down FPP's own playback stream; the update then
+  takes ~15-20 requests at ~10 ms; `Start` brings the stream back in ~0.2 s.
+  Measured song-to-song gap: 0.4-0.8 s. (`Suspend` does not work - PipeWire
+  restarts the node at once.)
+- Before that, the wait was for the first stalled request, which only
+  completed when FPP closed the idle stream 5 s after the song ended - a
+  ~5.4 s gap per song, and FPP then tore the stream down and rebuilt it
+  anyway. Sending the update during the song instead closed the gap but put
+  a dozen or more dropouts into the first minute of every tagged song, with
+  the text 60-90 s late.
+- **Never trust `system()`'s result inside fppd.** fppd installs SIGCHLD
+  with `SA_NOCLDWAIT`, so `system()` waits for the child but always returns
+  -1. `QuietUsbAudio` judges Pause and Start by the card's ALSA state, and
+  sends Start whenever it attempted a Pause. Trusting the exit status once
+  skipped the restart and left a song silent on air.
+- **Status polls are coalesced, and skip the device while the stream runs.**
+  One status read is two requests (~10 s while streaming), and the settings
+  page polls every 1.5 s. While streaming it gets the last reading, and the
+  page says the input level is not read during playback.
+- A track with no artist or title tags produces the same empty RadioText as
+  the one before it, so it sends nothing and pauses nothing.
+
+The real fix belongs in the kernel's musb host driver.
+
 ## Reset pin
 
 I2C only. The setting is a menu built from the board's own pin list. Cape

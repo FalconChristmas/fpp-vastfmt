@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <queue>
@@ -86,6 +87,17 @@ public:
     };
 
     bool      playlistActive = false;
+    // Bumped for every track; an RDS update for an older track that is still
+    // waiting in the queue is dropped rather than sent on top of this one.
+    std::atomic<uint64_t> mediaGeneration{0};
+
+    // Status polls are coalesced. A status read is two adapter requests,
+    // ~10 s while audio streams, and the settings page polls - queueing one
+    // per request built a backlog that held RDS updates back for minutes.
+    // While one read is outstanding, callers get the last result instead.
+    std::mutex statusMutex;
+    bool statusPending = false;
+    Json::Value lastStatus;
     // The last action logged at Info. A looping playlist repeats "playing"
     // every pass and asks "query_next" before each one; only a change is
     // worth a line in the log.
@@ -617,8 +629,30 @@ public:
             artist = "";
         }
         
-        formatAndSendText(effectiveStationText(), artist, title, true);
-        formatAndSendText(effectiveRdsText(), artist, title, false);
+        // FPP calls this on the playlist thread just before it opens the
+        // media, while the previous song's (now silent) USB audio stream is
+        // still running - so every adapter request would stall ~5 s (see
+        // CLAUDE.md). QuietUsbAudio pauses that stream for the update, which
+        // then takes well under a second; waiting for it here keeps the RDS
+        // text on time and keeps the requests out of the song itself, where
+        // each stall would put a dropout in the broadcast. The work runs on
+        // the worker, which owns the device, and the wait is bounded.
+        uint64_t gen = ++mediaGeneration;
+        auto job = runOnWorker([this, gen, artist, title](RadioJob &) {
+            if (gen != mediaGeneration || si4713 == nullptr || !rdsEnabled) {
+                return;
+            }
+            QuietUsbAudio quiet(this);
+            formatAndSendText(effectiveStationText(), artist, title, true);
+            if (gen != mediaGeneration) {
+                return;
+            }
+            formatAndSendText(effectiveRdsText(), artist, title, false);
+        }, 15000);
+        if (!job && running) {
+            LogWarn(VB_PLUGIN, "VAST-FMT: RDS update for \"%s\" is still running; "
+                    "starting the media without waiting for it\n", title.c_str());
+        }
     }
     
     
@@ -708,12 +742,192 @@ public:
         return root;
     }
 
+    // The last status read, marked stale. False if there has not been one.
+    bool lastStatusReply(Json::Value &out) {
+        std::lock_guard<std::mutex> g(statusMutex);
+        if (lastStatus.isNull()) {
+            return false;
+        }
+        out = lastStatus;
+        out["stale"] = true;
+        return true;
+    }
+
+    // The adapter's own sound card: its ALSA card number and id, from
+    // /proc/asound/cards ("  0 [ELECTRONICS    ]: USB-Audio - ... VAST ...").
+    // False on the I2C path or when the card is not there.
+    bool usbAudioCard(int &cardNum, std::string &cardId) {
+        if (settings["Connection"] == "I2C") {
+            return false;
+        }
+        std::ifstream cards("/proc/asound/cards");
+        std::string line;
+        while (std::getline(cards, line)) {
+            if (line.find("VAST") == std::string::npos) {
+                continue;
+            }
+            size_t lb = line.find('['), rb = line.find(']');
+            if (lb == std::string::npos || rb == std::string::npos || rb < lb) {
+                return false;
+            }
+            cardNum = atoi(line.c_str());
+            cardId = line.substr(lb + 1, rb - lb - 1);
+            while (!cardId.empty() && cardId.back() == ' ') {
+                cardId.pop_back();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // Is the USB adapter's own sound card streaming right now? That is the
+    // condition under which every adapter request stalls for ~5 s and leaves
+    // a dropout in the broadcast (see CLAUDE.md), so routine reads skip the
+    // device while it holds.
+    bool usbAudioStreaming() {
+        int card;
+        std::string cid;
+        if (!usbAudioCard(card, cid)) {
+            return false;
+        }
+        std::ifstream st("/proc/asound/card" + std::to_string(card) + "/pcm0p/sub0/status");
+        std::string l;
+        while (std::getline(st, l)) {
+            if (l.rfind("state:", 0) == 0) {
+                return l.find("RUNNING") != std::string::npos;
+            }
+        }
+        return false;
+    }
+
+    // Stops the adapter's USB audio stream for as long as it is in scope, so
+    // adapter requests complete in ~10 ms instead of stalling ~5 s each.
+    //
+    // It pauses the card's PipeWire sink node (fpp_alsa_<card id>, named the
+    // way FPP names it). That stops the USB stream within ~0.2 s and restarts
+    // it within ~0.2 s, without tearing down FPP's own playback stream - which
+    // is expensive, and which waiting it out used to cost: blocked on the
+    // first stalled request, the next song could not start until FPP closed
+    // the idle stream 5 s later. Only for use between songs, when nothing is
+    // playing; paused mid-song, the broadcast would drop out.
+    //
+    // fppd sets PIPEWIRE_RUNTIME_DIR for itself when PipeWire is the audio
+    // backend; without it there is no PipeWire sink to pause, and the requests
+    // simply take the slow path.
+    class QuietUsbAudio {
+    public:
+        explicit QuietUsbAudio(FPPVastFMPlugin *p) : plugin(p) {
+            int card;
+            std::string cid;
+            if (getenv("PIPEWIRE_RUNTIME_DIR") == nullptr || !p->usbAudioStreaming() ||
+                    !p->usbAudioCard(card, cid)) {
+                return;
+            }
+            for (auto &ch : cid) {
+                ch = std::isalnum(static_cast<unsigned char>(ch))
+                     ? std::tolower(static_cast<unsigned char>(ch)) : '_';
+            }
+            node = "fpp_alsa_" + cid;
+            // From here on the sink may be paused, whatever the command's
+            // result looks like, so the destructor must restart it.
+            attempted = true;
+            nodeCommand("Pause");
+            if (!waitForStreaming(false)) {
+                LogWarn(VB_PLUGIN, "VAST-FMT: pausing %s did not stop the USB audio stream; "
+                        "RDS update will be slow\n", node.c_str());
+            }
+        }
+        // Always resume after any pause attempt, however the work in between
+        // ended - a sink left paused is a silent show, and that has happened:
+        // trusting the command's exit status skipped the restart.
+        ~QuietUsbAudio() {
+            if (!attempted) {
+                return;
+            }
+            for (int tries = 0; tries < 2; tries++) {
+                nodeCommand("Start");
+                if (waitForStreaming(true)) {
+                    return;
+                }
+            }
+            LogErr(VB_PLUGIN, "VAST-FMT: %s did not restart after an RDS update\n", node.c_str());
+        }
+
+    private:
+        // The exit status is useless: fppd installs SIGCHLD with SA_NOCLDWAIT,
+        // so system() still waits for the child but always returns -1. Judge
+        // the commands by their effect on the card instead.
+        void nodeCommand(const char *cmd) {
+            std::string c = "pw-cli c " + node + " " + cmd + " '{}' >/dev/null 2>&1";
+            (void)system(c.c_str());
+        }
+        bool waitForStreaming(bool want) {
+            for (int waited = 0; waited <= 1000; waited += 20) {
+                if (plugin->usbAudioStreaming() == want) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            return false;
+        }
+        FPPVastFMPlugin *plugin;
+        std::string node;
+        bool attempted = false;
+    };
+
     void handleApi(const HttpRequestPtr &req, HttpCallback &&callback) {
         const bool retune = req->path().find("retune") != std::string::npos;
+        if (!retune && usbAudioStreaming()) {
+            // The settings page polls every 1.5 s; reading the device for it
+            // would put a dropout in the broadcast every few seconds.
+            Json::Value cached;
+            if (!lastStatusReply(cached)) {
+                cached["state"] = "not read while audio is playing";
+                cached["stale"] = true;
+            }
+            cached["audioPlaying"] = true;
+            callback(makeStringResponse(cached.toStyledString(), 200, "application/json"));
+            return;
+        }
+        if (!retune) {
+            bool pending;
+            {
+                std::lock_guard<std::mutex> g(statusMutex);
+                pending = statusPending;
+                if (!pending && running) {
+                    statusPending = true;
+                }
+            }
+            Json::Value cached;
+            if (pending && lastStatusReply(cached)) {
+                callback(makeStringResponse(cached.toStyledString(), 200, "application/json"));
+                return;
+            }
+        }
         auto job = runOnWorker([this, retune](RadioJob &j) {
-            j.result = retune ? retuneOnWorker() : statusJsonOnWorker();
+            if (retune) {
+                j.result = retuneOnWorker();
+                return;
+            }
+            // Clear the flag however this ends, or every later poll would
+            // be answered from the cache forever.
+            struct Done {
+                FPPVastFMPlugin *p;
+                ~Done() {
+                    std::lock_guard<std::mutex> g(p->statusMutex);
+                    p->statusPending = false;
+                }
+            } done{this};
+            j.result = statusJsonOnWorker();
+            std::lock_guard<std::mutex> g(statusMutex);
+            lastStatus = j.result;
         }, retune ? 25000 : 5000);
         if (!job) {
+            Json::Value cached;
+            if (!retune && lastStatusReply(cached)) {
+                callback(makeStringResponse(cached.toStyledString(), 200, "application/json"));
+                return;
+            }
             Json::Value err;
             err["ok"] = false;
             err["error"] = "timeout";
