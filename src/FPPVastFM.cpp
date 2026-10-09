@@ -86,6 +86,10 @@ public:
     };
 
     bool      playlistActive = false;
+    // The last action logged at Info. A looping playlist repeats "playing"
+    // every pass and asks "query_next" before each one; only a change is
+    // worth a line in the log.
+    std::string lastLoggedAction;
 
     // After Hours Music Player streams over mpd while FPP is idle. Polling its
     // track title lets RDS follow the stream instead of sitting on the static
@@ -532,8 +536,14 @@ public:
     
 
     virtual void playlistCallback(const Json::Value &playlist, const std::string &action, const std::string &section, int item) {
-        LogInfo(VB_PLUGIN, "VAST-FMT: playlistCallback action=%s section=%s item=%d\n",
-                action.c_str(), section.c_str(), item);
+        if (action != "query_next" && action != lastLoggedAction) {
+            lastLoggedAction = action;
+            LogInfo(VB_PLUGIN, "VAST-FMT: playlistCallback action=%s section=%s item=%d\n",
+                    action.c_str(), section.c_str(), item);
+        } else {
+            LogDebug(VB_PLUGIN, "VAST-FMT: playlistCallback action=%s section=%s item=%d\n",
+                     action.c_str(), section.c_str(), item);
+        }
 
         // FPP builds before the Playlist.cpp fix send one more "playing"
         // immediately after "stop", as the player goes idle. Taking that at
