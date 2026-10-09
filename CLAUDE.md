@@ -146,6 +146,16 @@ goes through it, so unloading the plugin drops the carrier too. On I2C the
 reset pin is then held low, so the carrier is off even if the core ignored
 `POWER_DOWN`.
 
+**On USB, the adapter gates its audio, and powering up does not open the
+gate.** The adapter's own `AudioEnable` request does, and its firmware sends
+it only when the device first powers on. Once stopping powered the chip down,
+every start after the first brought the carrier and RDS back with silent
+audio: the chip's ASQ input level read -96 dBfs while a track played, and only
+a power cycle of the adapter fixed it. `startVast()` now calls
+`enableAudio()` after tuning. To check audio is really reaching the chip,
+read ASQ *while something plays*. At start nothing is playing yet, so a low
+reading there proves nothing.
+
 "Never - RDS Only" is the exception: there the plugin only feeds RDS to a
 transmitter that keys its own carrier, so stopping leaves it alone.
 

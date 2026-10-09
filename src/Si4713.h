@@ -26,6 +26,11 @@ public:
     // zeros. Returns false if the status could not be read.
     virtual bool readTuneStatus(int &freq, int &power, int &antCapRaw) = 0;
 
+    // Open the audio path into the chip. Call once it is configured and
+    // tuned. A bare Si4713 takes its analog input directly, so there is
+    // nothing to do; the USB adapter gates its audio and must be told.
+    virtual bool enableAudio() { return true; }
+
     // GET_REV's part number. 10-13 are the Si4710/11/12/13 family; the bare
     // modules are 4713 and the V-FMT212R carries a 4711. Returns -1 if it
     // could not be read at all, which is what a dead part looks like.

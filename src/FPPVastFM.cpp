@@ -348,7 +348,10 @@ public:
                 rdsOnly = false;
                 f = safeStoi(settings["AntCap"], 0, "AntCap");
                 si4713->setTXPower(safeStoi(settings["Power"], 110, "Power"), f);
-                
+                if (!si4713->enableAudio()) {
+                    LogWarn(VB_PLUGIN, "VAST-FMT: the transmitter did not confirm enabling audio\n");
+                }
+
                 si4713->setPTY(safeStoi(settings["Pty"], 0, "Pty"));
                 
                 std::string asq = si4713->getASQ();

@@ -374,8 +374,12 @@ std::string VASTFMT::getTuneStatus() {
     }
     return "";
 }
-void VASTFMT::enableAudio() {
-    sendDeviceCommand(RequestSi4711AudioEnable);
+// The adapter only passes USB audio to the chip after this request. Its own
+// firmware sends it when the device first powers on, which is why a cold boot
+// worked; once the plugin has powered the chip down and back up, everything
+// else - carrier, RDS - comes back but the audio stays silent until asked for.
+bool VASTFMT::enableAudio() {
+    return sendDeviceCommand(RequestSi4711AudioEnable);
 }
 void VASTFMT::disableAudio() {
     sendDeviceCommand(RequestSi4711AudioDisable);

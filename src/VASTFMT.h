@@ -21,7 +21,7 @@ public:
     virtual bool readTuneStatus(int &freq, int &power, int &antCapRaw) override;
     
     
-    void enableAudio();
+    virtual bool enableAudio() override;
     void disableAudio();
 protected:
     virtual bool sendSi4711Command(uint8_t cmd, const std::vector<uint8_t> &data, std::vector<uint8_t> &out, bool ignoreFailures = false) override;
