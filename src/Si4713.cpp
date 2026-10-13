@@ -1,5 +1,6 @@
 #include <fpp-pch.h>
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include <chrono>
@@ -366,6 +367,26 @@ void Si4713::sendRtPlusInfo(int content1, int content1_pos, int content1_len,
     uint8_t msg[6];
     std::vector<uint8_t> resp(6);
 
+    // A tag must lie inside the 64-character RadioText. A placeholder missing from the text
+    // template arrives as position -1, and text past the 64-character limit is not sent.
+    auto fit = [](int pos, int &len) {
+        if (pos < 0 || pos > 63 || len <= 0) {
+            len = 0;
+            return;
+        }
+        len = std::min(len, 64 - pos);
+    };
+    fit(content1_pos, content1_len);
+    fit(content2_pos, content2_len);
+    if (!content1_len && content2_len) {
+        // Tag 1's fields come first in the group; a lone tag goes there, not in tag 2's
+        // slot (whose length marker is a bit shorter).
+        std::swap(content1, content2);
+        std::swap(content1_pos, content2_pos);
+        std::swap(content1_len, content2_len);
+    }
+    content2_len = std::min(content2_len, 32);   // the second length marker has only 5 bits
+
     if (content1_len || content2_len) {
     
         memset (msg, 0x00, 6);
@@ -381,13 +402,13 @@ void Si4713::sendRtPlusInfo(int content1, int content1_pos, int content1_len,
         if (content1_len) {
             bs_put(bs, content1, 6);        //RT content type 1
             bs_put(bs, content1_pos, 6);    //start marker 1
-            bs_put(bs, content1_len, 6);    //length marker 1
+            bs_put(bs, content1_len - 1, 6); //length marker 1 (characters - 1)
         }
     
         if (content2_len) {
             bs_put(bs, content2, 6);        //RT content type 2
             bs_put(bs, content2_pos, 6);    //start marker 2
-            bs_put(bs, content2_len, 5);    //length marker 2 (5 bits!)
+            bs_put(bs, content2_len - 1, 5); //length marker 2 (characters - 1, 5 bits!)
         }
     
         sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF,
