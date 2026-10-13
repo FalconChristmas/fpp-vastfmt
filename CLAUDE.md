@@ -19,6 +19,8 @@ It broadcasts whatever audio FPP plays and sends RDS (PS and RadioText).
 | `src/VASTFMT.cpp/.h` | USB HID transport (the V-FMT212R adapter) |
 | `src/I2CSi4713.cpp/.h` | I2C transport, including the reset-pin sequence |
 | `src/bitstream.c/.h` | RDS bit packing |
+| `src/RDSCharset.h` | UTF-8 → RDS character set (E.1), one byte per character. `formatAndSendText()` converts its inputs once at the top, so the PS split and RT+ positions after it are in on-air characters; `Si4713` takes RDS bytes. Shared verbatim with fpp-kfmt |
+| `tests/` | Test of the RDS text path against a fake chip; needs an FPP tree (`make -C tests SRCDIR=/opt/fpp/src`) |
 | `settings.json` | Setting metadata: types, ranges, tooltips, Advanced gating |
 | `plugin_setup.php` | Settings page, status panel, station-text preview |
 | `scripts/fpp_install.sh`, `fpp_uninstall.sh` | Lifecycle (build in place) |

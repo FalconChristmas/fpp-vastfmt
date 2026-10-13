@@ -25,6 +25,7 @@
 
 #include "VASTFMT.h"
 #include "I2CSi4713.h"
+#include "RDSCharset.h"
 #include "util/GPIOUtils.h"
 
 #if defined(PLATFORM_BBB) || defined(PLATFORM_BB64)
@@ -483,7 +484,13 @@ public:
         }
     }
     
-    void formatAndSendText(const std::string &text, const std::string &artist, const std::string &title, bool station) {
+    void formatAndSendText(const std::string &textUtf8, const std::string &artistUtf8, const std::string &titleUtf8, bool station) {
+        // Work in the RDS character set from here on: one byte per on-air character, so the
+        // 8-character PS split, the 64-character RadioText limit and the RT+ positions below
+        // are all counted the way a receiver counts them.
+        const std::string text = utf8ToRDS(textUtf8);
+        const std::string artist = utf8ToRDS(artistUtf8);
+        const std::string title = utf8ToRDS(titleUtf8);
         std::string output;
         
         int artistIdx = -1;
