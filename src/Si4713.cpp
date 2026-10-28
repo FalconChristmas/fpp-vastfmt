@@ -334,22 +334,48 @@ void Si4713::setRDSBuffer(const std::string &station,
 
     std::vector<uint8_t> resp(6);
     if (station.size() != 0) {
-        int count = (sl + 3) / 4;
+        // The third byte is block B's low bits: the Text A/B flag in bit 4 and the
+        // segment address (0-15) below it. Index 16 would be address 0 with the flag
+        // flipped, which receivers take as a new, empty message and clear the text.
+        // So the carriage return goes inside the last segment, and at the full 64
+        // characters there is none.
+        // A new text, so flip the A/B flag once; it stays the same for every segment of it.
+        rtTextAB ^= 0x10;
+        int count = 16;
+        if (sl < 64) {
+            buf[sl] = 0x0d;
+            count = (sl + 4) / 4;
+        }
         //printf("%d,   %s\n", count, station.c_str());
         for (uint8_t i = 0; i < count; i++) {
             uint8_t sb = TX_RDS_BUFF_IN_LDBUFF;
             if (i == 0) {
                 sb |= TX_RDS_BUFF_IN_MTBUFF;
             }
-            sendSi4711Command(TX_RDS_BUFF, {sb, 0x20, i, buf[i*4], buf[(i*4)+1], buf[(i*4)+2], buf[(i*4)+3], 0}, resp);
+            sendSi4711Command(TX_RDS_BUFF, {sb, 0x20, (uint8_t)(i | rtTextAB), buf[i*4], buf[(i*4)+1], buf[(i*4)+2], buf[(i*4)+3], 0}, resp);
             LogExcess(VB_PLUGIN, "   res:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
         }
-        uint8_t idx = count;
-        sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF, 0x20, idx, 0x0d, 0x00, 0x00, 0x00, 0}, resp);
-        LogExcess(VB_PLUGIN, "   res:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
-        sendRtPlusInfo(1, titlePos, titleLen, 4, artistPos, artistLen);
+        bool hasTag = (titlePos >= 0 && titleLen > 0) || (artistPos >= 0 && artistLen > 0);
+        if (hasTag) {
+            sendRtPlusInfo(1, titlePos, titleLen, 4, artistPos, artistLen);
+        } else {
+            // Text with no track in it (static text, or After Hours just turned off) goes
+            // out as a new RT+ item titled with the whole line. An RT+ receiver only moves
+            // its display for a new tagged item, and some keep the previous artist field
+            // until a new ITEM.ARTIST tag arrives, so the artist tag covers one space in the
+            // line: a tag is at least one character, and a blank one clears the old artist.
+            int blank = -1;
+            for (int x = sl - 1; x >= 0; --x) {
+                if (buf[x] == ' ') {
+                    blank = x;
+                    break;
+                }
+            }
+            sendRtPlusInfo(1, 0, sl, 4, blank, blank >= 0 ? 1 : 0);
+        }
     } else {
         sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_MTBUFF, 0, 0, 0, 0, 0, 0});
+        sendRtPlusInfo(1, -1, 0, 4, -1, 0);
     }
     sendTimestamp();
 
@@ -387,54 +413,58 @@ void Si4713::sendRtPlusInfo(int content1, int content1_pos, int content1_len,
     }
     content2_len = std::min(content2_len, 32);   // the second length marker has only 5 bits
 
-    if (content1_len || content2_len) {
+    // With no tag the group still goes out, with the item running bit cleared and the toggle
+    // flipped: that is how a receiver learns the item has ended. Sending nothing left RT+
+    // receivers showing the last title and artist after the text changed.
+    const bool tagged = content1_len || content2_len;
+    memset (msg, 0x00, 6);
+    bitstream_t *bs = nullptr;
+    bs_create(&bs);
+    bs_attach(bs, (uint8_t *) msg, 6);
     
-        memset (msg, 0x00, 6);
-        bitstream_t *bs = nullptr;
-        bs_create(&bs);
-        bs_attach(bs, (uint8_t *) msg, 6);
-        
-        bs_put(bs, 0x00, 3);                    //seek to start pos
-        rtplus_toggle_bit = !rtplus_toggle_bit; //if we using RT+, update information!
-        bs_put(bs, rtplus_toggle_bit, 1);       //Item toggle bit
-        bs_put(bs, 1, 1);                       //Item running bit
-    
-        if (content1_len) {
-            bs_put(bs, content1, 6);        //RT content type 1
-            bs_put(bs, content1_pos, 6);    //start marker 1
-            bs_put(bs, content1_len - 1, 6); //length marker 1 (characters - 1)
-        }
-    
-        if (content2_len) {
-            bs_put(bs, content2, 6);        //RT content type 2
-            bs_put(bs, content2_pos, 6);    //start marker 2
-            bs_put(bs, content2_len - 1, 5); //length marker 2 (characters - 1, 5 bits!)
-        }
-    
-        sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF,
-                        RTPLUS_GROUP_ID << 4,
-                        msg[0], msg[1], msg[2], msg[3], msg[4]}, resp);
-        LogExcess(VB_PLUGIN, "   res+:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
+    bs_put(bs, 0x00, 3);                    //seek to start pos
+    rtplus_toggle_bit = !rtplus_toggle_bit; //if we using RT+, update information!
+    bs_put(bs, rtplus_toggle_bit, 1);       //Item toggle bit
+    bs_put(bs, tagged ? 1 : 0, 1);          //Item running bit
+    LogDebug(VB_PLUGIN, "Si4713: RT+ running=%d toggle=%d tag1=%d@%d+%d tag2=%d@%d+%d\n",
+            tagged ? 1 : 0, rtplus_toggle_bit, content1, content1_pos, content1_len,
+            content2, content2_pos, content2_len);
 
-        //send RT+ announces
-        //  FmRadioController::HandleRDSData
-        //  FmRadioRDSParser::ParseRDSData  RDSGroup:6
-        //  !!TEST FmRadioRDSParser::RT+ GROUP_TYPE_3A : RT+ Message
-        //  !!TEST FmRadioRDSParser::RT+ Message RT+ flag : 0 0, RT+ AID : 4bd7 19415 (flag : 0 0)
-        //  !!TEST FmRadioRDSParser::RT+ Message application group type code : 16 22
-        sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF,
-            0x30, //RDS GROUP: 3A
-            RTPLUS_GROUP_ID << 1, //we are describing RT+ group 11A
-                        //RTPLUS_GROUP_ID, //we are describing RT+ group 11A
-            0, //xxx.y.zzzz
-               //xxx  - rfu
-               //y    - cb flag (for template number)
-               //zzzz - for rds server needs.
-            0, //template id=0
-            0x4B, 0xD7 //it's RT+
-        }, resp);
-        LogExcess(VB_PLUGIN, "   res+:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
+    if (content1_len) {
+        bs_put(bs, content1, 6);        //RT content type 1
+        bs_put(bs, content1_pos, 6);    //start marker 1
+        bs_put(bs, content1_len - 1, 6); //length marker 1 (characters - 1)
     }
+
+    if (content2_len) {
+        bs_put(bs, content2, 6);        //RT content type 2
+        bs_put(bs, content2_pos, 6);    //start marker 2
+        bs_put(bs, content2_len - 1, 5); //length marker 2 (characters - 1, 5 bits!)
+    }
+
+    sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF,
+                    RTPLUS_GROUP_ID << 4,
+                    msg[0], msg[1], msg[2], msg[3], msg[4]}, resp);
+    LogExcess(VB_PLUGIN, "   res+:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
+
+    //send RT+ announces
+    //  FmRadioController::HandleRDSData
+    //  FmRadioRDSParser::ParseRDSData  RDSGroup:6
+    //  !!TEST FmRadioRDSParser::RT+ GROUP_TYPE_3A : RT+ Message
+    //  !!TEST FmRadioRDSParser::RT+ Message RT+ flag : 0 0, RT+ AID : 4bd7 19415 (flag : 0 0)
+    //  !!TEST FmRadioRDSParser::RT+ Message application group type code : 16 22
+    sendSi4711Command(TX_RDS_BUFF, {TX_RDS_BUFF_IN_LDBUFF,
+        0x30, //RDS GROUP: 3A
+        RTPLUS_GROUP_ID << 1, //we are describing RT+ group 11A
+                    //RTPLUS_GROUP_ID, //we are describing RT+ group 11A
+        0, //xxx.y.zzzz
+           //xxx  - rfu
+           //y    - cb flag (for template number)
+           //zzzz - for rds server needs.
+        0, //template id=0
+        0x4B, 0xD7 //it's RT+
+    }, resp);
+    LogExcess(VB_PLUGIN, "   res+:  %2X %2X %2X %2X %2X %2X\n", resp[0], resp[1], resp[2], resp[3], resp[4], resp[5]);
 }
 
 

@@ -20,7 +20,8 @@ It broadcasts whatever audio FPP plays and sends RDS (PS and RadioText).
 | `src/I2CSi4713.cpp/.h` | I2C transport, including the reset-pin sequence |
 | `src/bitstream.c/.h` | RDS bit packing |
 | `src/RDSCharset.h` | UTF-8 → RDS character set (E.1), one byte per character. `formatAndSendText()` converts its inputs once at the top, so the PS split and RT+ positions after it are in on-air characters; `Si4713` takes RDS bytes. Shared verbatim with fpp-kfmt |
-| `tests/` | Test of the RDS text path against a fake chip; needs an FPP tree (`make -C tests SRCDIR=/opt/fpp/src`) |
+| `src/RDSTextTemplate.h` | RDS Text template helpers: the separator rule for an empty `{Artist}`/`{Title}`, and the Station Text as one RadioText line. Header-only, RDS bytes |
+| `tests/` | Test of the RDS text path against a fake chip; needs an FPP tree (`make -C tests SRCDIR=/opt/fpp/src`). `rds_text_template_test` needs no FPP |
 | `settings.json` | Setting metadata: types, ranges, tooltips, Advanced gating |
 | `plugin_setup.php` | Settings page, status panel, station-text preview |
 | `scripts/fpp_install.sh`, `fpp_uninstall.sh` | Lifecycle (build in place) |

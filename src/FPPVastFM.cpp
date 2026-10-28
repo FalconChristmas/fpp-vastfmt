@@ -26,6 +26,7 @@
 #include "VASTFMT.h"
 #include "I2CSi4713.h"
 #include "RDSCharset.h"
+#include "RDSTextTemplate.h"
 #include "util/GPIOUtils.h"
 
 #if defined(PLATFORM_BBB) || defined(PLATFORM_BB64)
@@ -111,6 +112,13 @@ public:
     uint64_t  nextMpcPoll  = 0;
     std::string mpcTitle;
     std::string mpcArtist;
+    // The artist and title last sent as RadioText (empty when none), so a text setting
+    // change can be filled with the track on the air. Worker thread only.
+    std::string airArtist;
+    std::string airTitle;
+    // The Station Text last sent, filled and in the RDS character set: the RadioText fallback
+    // when the RDS Text comes out empty. Worker thread only.
+    std::string airStation;
 
     // Temporary overrides driven by FPP commands. Non-empty wins over the
     // configured text; an empty string is how a command restores the
@@ -435,11 +443,13 @@ public:
             return;
         }
         if (key == "StationText" || key == "RDSTextText") {
-            // Just push the new text; no reason to drop the carrier for it.
+            // Just push the new text; no reason to drop the carrier for it. Fill it with
+            // the track on the air, if any, rather than blanking it until the next one.
             queueWork([this]() {
                 if (si4713 != nullptr && rdsEnabled) {
-                    formatAndSendText(effectiveStationText(), "", "", true);
-                    formatAndSendText(effectiveRdsText(), "", "", false);
+                    const std::string artist = airArtist, title = airTitle;
+                    formatAndSendText(effectiveStationText(), artist, title, true);
+                    formatAndSendText(effectiveRdsText(), artist, title, false);
                 }
             });
             return;
@@ -488,6 +498,10 @@ public:
         // Work in the RDS character set from here on: one byte per on-air character, so the
         // 8-character PS split, the 64-character RadioText limit and the RT+ positions below
         // are all counted the way a receiver counts them.
+        if (!station) {
+            airArtist = artistUtf8;
+            airTitle = titleUtf8;
+        }
         const std::string text = utf8ToRDS(textUtf8);
         const std::string artist = utf8ToRDS(artistUtf8);
         const std::string title = utf8ToRDS(titleUtf8);
@@ -499,7 +513,12 @@ public:
         if (!si4713)
             return;
 
+        size_t gapFrom = 0, gapTo = 0;
+        separatorGap(text, artist.empty(), title.empty(), gapFrom, gapTo);
         for (int x = 0; x < text.length(); x++) {
+            if ((size_t)x >= gapFrom && (size_t)x < gapTo) {
+                continue;
+            }
             if (text[x] == '[') {
                 if (artist == "" && title == "") {
                     while (text[x] != ']' && x < text.length()) {
@@ -529,6 +548,7 @@ public:
         }
         if (station) {
             LogDebug(VB_PLUGIN, "Setting RDS Station text to \"%s\"\n", output.c_str());
+            airStation = output;
             std::vector<std::string> fragments;
             while (output.size()) {
                 if (output.size() <= 8) {
@@ -548,6 +568,14 @@ public:
             }
             si4713->setRDSStation(fragments);
         } else {
+            if (output.find_first_not_of(' ') == std::string::npos) {
+                // Nothing to send (a template like "[{Artist} - {Title}]" with no track).
+                // An empty RadioText only ends the RT+ item, and receivers that display RT+
+                // fields can keep the last title and artist, so send the Station Text as a
+                // plain line instead. Only if that is empty too does the RadioText go blank.
+                output = stationTextAsLine(airStation);
+                artistIdx = titleIdx = -1;
+            }
             LogDebug(VB_PLUGIN, "Setting RDS text to \"%s\"\n", output.c_str());
             si4713->setRDSBuffer(output, artistIdx, artist.length(), titleIdx, title.length());
         }

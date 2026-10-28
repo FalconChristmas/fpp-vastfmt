@@ -102,8 +102,64 @@ static std::string tag(const OnAir &a, int ct) {
     return it == a.tags.end() ? "<none>" : it->second;
 }
 
+// The RadioText groups (2A) exactly as sent: block B's low byte carries the Text A/B flag in
+// bit 4 and the segment address in bits 3-0, so only addresses 0-15 exist. An index of 16 is
+// address 0 with the flag flipped, which a receiver takes as a new message and clears the
+// text. The segments must run 0, 1, 2... with a carriage return inside the data when the text
+// is shorter than 64 characters, and none at 64.
+static void checkSegments(size_t n) {
+    std::string text;
+    for (size_t i = 0; i < n; i++) text += (char)('A' + i % 26);
+    FakeChip chip;
+    chip.setRDSBuffer(text, -1, 0, 0, (int)n);
+
+    const std::string what = "RT of " + std::to_string(n) + " chars: ";
+    size_t sl = std::min<size_t>(n, 64);
+    size_t want = sl < 64 ? (sl + 4) / 4 : 16;
+    std::vector<uint8_t> idx;
+    std::string bytes;
+    std::vector<uint8_t> plus;
+    for (auto &d : chip.rdsBuff) {
+        if (d.size() >= 7 && d[1] == 0x20) {
+            idx.push_back(d[2]);
+            bytes += std::string{(char)d[3], (char)d[4], (char)d[5], (char)d[6]};
+        }
+        if (d.size() >= 7 && d[1] == 0xB0) plus = d;
+    }
+    std::string got;
+    for (uint8_t i : idx) got += std::to_string(i) + " ";
+    bool inRange = true, sameFlag = true, inOrder = true;
+    for (size_t i = 0; i < idx.size(); i++) {
+        inRange &= (idx[i] & 0xEF) <= 15;
+        sameFlag &= (idx[i] & 0x10) == (idx[0] & 0x10);
+        inOrder &= (idx[i] & 0x0F) == i;
+    }
+    expect(inRange, what + "no segment index above 15", got);
+    expect(sameFlag, what + "A/B flag never changes", got);
+    expect(inOrder && idx.size() == want, what + std::to_string(want) + " segments, addressed 0 up", got);
+    std::string shown = bytes.substr(0, std::min(sl, bytes.size()));
+    expect(shown == text.substr(0, sl), what + "text arrives intact", shown);
+    if (sl < 64) {
+        expect(bytes.size() > sl && bytes[sl] == '\r', what + "carriage return right after the text",
+               bytes.size() > sl ? std::to_string((int)(unsigned char)bytes[sl]) : "missing");
+    } else {
+        expect(bytes.find('\r') == std::string::npos, what + "no carriage return at 64", "found one");
+    }
+    if (plus.size() >= 7) {
+        uint8_t c1 = plus[3], c2 = plus[4];
+        size_t s1 = ((c1 & 0x1F) << 1) | (c2 >> 7), l1 = ((c2 >> 1) & 0x3F) + 1;
+        expect(s1 + l1 <= sl && bytes.substr(s1, l1) == text.substr(0, sl),
+               what + "RT+ tag covers the message and stays inside it",
+               std::to_string(s1) + "+" + std::to_string(l1));
+    } else {
+        expect(false, what + "RT+ tag sent", "none");
+    }
+}
+
 int main() {
     const int TITLE = 1, ARTIST = 4;
+
+    for (size_t n : {1, 4, 57, 59, 60, 61, 63, 64, 70}) checkSegments(n);
 
     // "{Title} - {Artist}" filled the way formatAndSendText() does it.
     std::string title = utf8ToRDS("Feliz Año Nuevo"), artist = utf8ToRDS("José Pérez");
@@ -123,6 +179,71 @@ int main() {
     a = send(longTitle + " - " + band, (int)longTitle.size() + 3, (int)band.size(), 0, (int)longTitle.size());
     // The artist starts at position 61, so characters 61-63 are all that fit in 64.
     expect(tag(a, ARTIST) == "Old", "artist tag clipped at character 64", tag(a, ARTIST));
+
+    // Switching from a tagged title to static text: the RT+ group must say the item ended
+    // (running bit 0, toggle flipped), or an RT+ receiver keeps the last title and artist.
+    // Block B's low byte carries the item toggle bit in bit 4 and the running bit in bit 3.
+    {
+        FakeChip chip;
+        auto lastPlus = [&]() {
+            std::vector<uint8_t> p;
+            for (auto &d : chip.rdsBuff) if (d.size() >= 7 && d[1] == 0xB0) p = d;
+            return p;
+        };
+        chip.setRDSBuffer("Graham Blvd - Rock Lobster", 0, 11, 14, 12);
+        std::vector<uint8_t> song = lastPlus();
+        chip.rdsBuff.clear();
+        chip.setRDSBuffer("Light Show 88.1 FM", -1, 0, -1, 0);
+        std::vector<uint8_t> text = lastPlus();
+        bool both = song.size() >= 7 && text.size() >= 7;
+        expect(both && (song[2] & 0x08), "song: RT+ item running", both ? "" : "no RT+ group");
+        expect(both && (text[2] & 0x08), "static text after a song: a new RT+ item, running", both ? "not running" : "no RT+ group");
+        expect(both && ((song[2] ^ text[2]) & 0x10), "static text after a song: RT+ toggle flipped", "same toggle");
+
+        // An empty RadioText after a song (After Hours turned off with "[{Artist} - {Title}]").
+        chip.setRDSBuffer("Graham Blvd - Rock Lobster", 0, 11, 14, 12);
+        song = lastPlus();
+        chip.rdsBuff.clear();
+        chip.setRDSBuffer("", -1, 0, -1, 0);
+        text = lastPlus();
+        both = song.size() >= 7 && text.size() >= 7;
+        expect(both && !(text[2] & 0x08) && ((song[2] ^ text[2]) & 0x10),
+               "empty text after a song: RT+ item ended, toggle flipped", both ? "still running" : "no RT+ group");
+    }
+
+    // The RadioText A/B flag flips once per new text, and never within one.
+    {
+        FakeChip chip;
+        auto flags = [&]() {
+            std::vector<int> f;
+            for (auto &d : chip.rdsBuff) if (d.size() >= 7 && d[1] == 0x20) f.push_back(d[2] & 0x10);
+            return f;
+        };
+        chip.setRDSBuffer("Graham Blvd - Rock Lobster", 0, 11, 14, 12);
+        std::vector<int> a = flags();
+        chip.rdsBuff.clear();
+        chip.setRDSBuffer("Light Show 88.1 FM", -1, 0, -1, 0);
+        std::vector<int> b = flags();
+        chip.rdsBuff.clear();
+        chip.setRDSBuffer("Light Show 88.1 FM", -1, 0, -1, 0);
+        bool ok = !a.empty() && !b.empty() && a.front() != b.front();
+        for (int x : a) ok &= x == a.front();
+        for (int x : b) ok &= x == b.front();
+        expect(ok, "new text flips the RadioText A/B flag once", "unchanged or mixed");
+        expect(chip.rdsBuff.empty(), "unchanged text is not resent", "resent");
+    }
+
+    // Static text is tagged as the item title, whole line, no artist.
+    {
+        OnAir s = send("Light Show 88.1 FM", -1, 0, -1, 0);
+        expect(tag(s, TITLE) == "Light Show 88.1 FM", "static text: RT+ title is the whole line", tag(s, TITLE));
+        expect(tag(s, ARTIST) == " ", "static text: RT+ artist is one blank", "\"" + tag(s, ARTIST) + "\"");
+        s = send("Lights", -1, 0, -1, 0);
+        expect(tag(s, TITLE) == "Lights" && tag(s, ARTIST) == "<none>", "static text with no space: title only", tag(s, ARTIST));
+        std::string full(64, 'x');
+        s = send(full, -1, 0, -1, 0);
+        expect(tag(s, TITLE) == full, "static text of 64: RT+ title covers all 64", tag(s, TITLE));
+    }
 
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
