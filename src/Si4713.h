@@ -94,6 +94,9 @@ private:
     int pty = 2;
     std::vector<std::string> lastStation;
     std::string lastRDS;
+    // RadioText A/B flag (block B bit 4), flipped once per new text: a receiver clears
+    // its RadioText and RT+ item when it changes.
+    uint8_t rtTextAB = 0;
     
     bool audioCompression = true;
     bool audioLimitter = true;
